@@ -19,3 +19,5 @@ RoboTwin 原统计入口新增 manifest 模式，直接复用 reader 的wxyz转�
 依赖：在原 OpenWAM 环境用 uv pip install --no-deps --no-build-isolation -e 注册已有 clean FastWAM b856e4929c6a552540008808b188729361fa531a，不安装其整套训练依赖以避免与OpenWAM版本冲突。正式执行须绑定该源码SHA及本次补丁发布SHA；不将临时overlay结果当作已推送版本。
 
 发布授权：2026-10-15 用户明确确认创建 Frankaaay/OpenWAM fork，在 frank/eighteen-preparation 分支仅提交任务清单16个文件。基线保持指定4d7f642，不合入上游后续image-only变更。本提交发布已完成的接入与验证，不代表18项已全部具备开训条件。正式生产转换与最终配置验证继续进行，未授权本轮启动训练。
+
+十二项准备：encoder 的训练与部署 SHA 绑定已由 u8000 改为用户选定 u15853（61c6057b…252eae）。AST 通过；依赖 FastWAM 新 loader 发布，尚未进行本轮 GPU 联合 smoke。
