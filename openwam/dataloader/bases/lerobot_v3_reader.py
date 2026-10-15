@@ -808,6 +808,8 @@ class LeRobotV3Reader(BaseDataset):
         plus every head-view sampling choice, deduped, order-stable."""
         cams = [self._head_camera, self._left_wrist_camera, self._right_wrist_camera]
         cams.extend(self._head_camera_choices or ())
+        if getattr(self, "stereo", False):
+            cams.extend(c + "_right" for c in list(cams) if c is not None)
         return tuple(dict.fromkeys(c for c in cams if c is not None))
 
     def _add_episode_offsets(self, eps: pd.DataFrame) -> None:
@@ -877,25 +879,25 @@ class LeRobotV3Reader(BaseDataset):
 
         # 5) video — decode head (+ optional wrist) frames into the canvas
         real_local_indices = self._video_sample_indices[self._video_sample_indices < actual_raw_len]
+        video, exclusion_masks = self._decode_window_video(
+            row, ep_local, offset, real_local_indices, idx, return_missing_masks=True)
+        right_video = None
+        if getattr(self, "stereo", False):
+            right_video, right_masks = self._decode_window_video(
+                row, ep_local, offset, real_local_indices, idx,
+                return_missing_masks=True, camera_suffix="_right")
         if self._color_jitter is not None:
-            # Same jitter factors across the whole clip (temporal consistency).
-            video, exclusion_masks = self._decode_window_video(
-                row,
-                ep_local,
-                offset,
-                real_local_indices,
-                idx,
-                return_missing_masks=True,
-            )
-            jitter_input = {"video": video}
+            count = len(video)
+            jitter_input = {"video": video + (right_video or [])}
             if exclusion_masks is not None:
-                jitter_input["video_jitter_exclusion_masks"] = exclusion_masks
-            video = self._color_jitter.apply(jitter_input)["video"]
-        else:
-            video = self._decode_window_video(row, ep_local, offset, real_local_indices, idx)
+                jitter_input["video_jitter_exclusion_masks"] = exclusion_masks + (right_masks if right_video else [])
+            combined = self._color_jitter.apply(jitter_input)["video"]
+            video = combined[:count]
+            if right_video is not None:
+                right_video = combined[count:]
         video_mask = torch.from_numpy(self._video_sample_indices < actual_raw_len)
 
-        return {
+        result = {
             "video": video,
             "vace_video": None,
             "first_frame_image": [video[0]] if video else [],
@@ -906,6 +908,9 @@ class LeRobotV3Reader(BaseDataset):
             "proprio_mask": torch.from_numpy(proprio_mask),
             "prompt": prompt,
         }
+        if right_video is not None:
+            result["right_video"] = right_video
+        return result
 
     # ----- action / proprio finalization -----------------------------------
 
@@ -1003,6 +1008,7 @@ class LeRobotV3Reader(BaseDataset):
         idx: int,
         *,
         return_missing_masks: bool = False,
+        camera_suffix: str = "",
     ):
         """Decode the window's frames into a list of PIL images (single-view) or
         L-shape multiview canvases, with last-real-frame padding. Optionally
@@ -1010,13 +1016,13 @@ class LeRobotV3Reader(BaseDataset):
 
         Head decode failure is fatal (raises → ``_safe_get`` retries). Wrist
         (auxiliary) decode failure is tolerated (black slot)."""
-        head_camera = self._head_camera
+        head_camera = self._head_camera + camera_suffix
         if self._head_camera_choices is not None:
             # Head-view sampling (train only): decode the head slot from one
             # uniformly sampled choice. The frames still land under the
             # _head_camera layout key below — slot names are fixed, only the
             # decoded content varies.
-            head_camera = self._head_camera_choices[random.randrange(len(self._head_camera_choices))]
+            head_camera = self._head_camera_choices[random.randrange(len(self._head_camera_choices))] + camera_suffix
         head_frames = self._decode_one_camera(head_camera, row, ep_local, offset, real_local_indices, kind="head")
         if not head_frames:
             raise RuntimeError(f"empty head-video decode for {self.DATASET_NAME}({self._dataset_id}) at idx={idx}")
@@ -1024,14 +1030,14 @@ class LeRobotV3Reader(BaseDataset):
         if self._multiview:
             left_frames = (
                 self._decode_one_camera(
-                    self._left_wrist_camera, row, ep_local, offset, real_local_indices, kind="wrist"
+                    self._left_wrist_camera + camera_suffix, row, ep_local, offset, real_local_indices, kind="wrist_strict" if getattr(self, "stereo", False) else "wrist"
                 )
                 if self._left_wrist_camera
                 else []
             )
             right_frames = (
                 self._decode_one_camera(
-                    self._right_wrist_camera, row, ep_local, offset, real_local_indices, kind="wrist"
+                    self._right_wrist_camera + camera_suffix, row, ep_local, offset, real_local_indices, kind="wrist_strict" if getattr(self, "stereo", False) else "wrist"
                 )
                 if self._right_wrist_camera
                 else []
@@ -1092,13 +1098,15 @@ class LeRobotV3Reader(BaseDataset):
         if camera not in self._ep_video_frame_offsets:
             return []
 
-        if kind == "head":
+        if kind in ("head", "wrist_strict"):
             path = self._dataset_dir / self._video_path_template.format(
                 video_key=camera, chunk_index=int(row[chunk_col]), file_index=int(row[file_col])
             )
             v_base = int(self._ep_video_frame_offsets[camera][ep_local]) + offset
             frame_indices = (real_local_indices + v_base).tolist()
             h, w = (_HEAD_SLOT_H, _HEAD_SLOT_W) if self._multiview else (self._height, self._width)
+            if kind == "wrist_strict":
+                h, w = _WRIST_SLOT_H, _WRIST_SLOT_W
             return _decode_video_frames(str(path), frame_indices, h, w)
 
         # wrist: tolerated decode — path/offset computation lives INSIDE the try so a

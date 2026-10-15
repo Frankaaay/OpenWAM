@@ -21,3 +21,5 @@ RoboTwin 原统计入口新增 manifest 模式，直接复用 reader 的wxyz转�
 发布授权：2026-10-15 用户明确确认创建 Frankaaay/OpenWAM fork，在 frank/eighteen-preparation 分支仅提交任务清单16个文件。基线保持指定4d7f642，不合入上游后续image-only变更。本提交发布已完成的接入与验证，不代表18项已全部具备开训条件。正式生产转换与最终配置验证继续进行，未授权本轮启动训练。
 
 十二项准备：encoder 的训练与部署 SHA 绑定已由 u8000 改为用户选定 u15853（61c6057b…252eae）。AST 通过；依赖 FastWAM 新 loader 发布，尚未进行本轮 GPU 联合 smoke。
+
+LIBERO 配对 reader 增加 stereo 配置：复用原 action/proprio/normalization，左右同时间窗口与同色彩增强、保持缺失第三相机黑区域；右目及腕部读取缺失必须失败。新增定向布局与缺右目回归，待远端真实读取。

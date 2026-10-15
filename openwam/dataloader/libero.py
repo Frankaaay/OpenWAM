@@ -105,6 +105,7 @@ class LiberoDataset(LeRobotV3Reader):
         "observation.images.wrist",
     )
     CONFIG_KEYS: ClassVar[Tuple[str, ...]] = LeRobotV3Reader.CONFIG_KEYS + (
+        "stereo",
         "action_mode",
         "head_camera_priority",
         "wrist_camera_priority",
@@ -116,6 +117,7 @@ class LiberoDataset(LeRobotV3Reader):
         dataset_dir: str,
         *,
         action_mode: str = ACTION_MODE,
+        stereo: bool = False,
         head_camera_priority: Optional[Sequence[str]] = None,
         wrist_camera_priority: Optional[Sequence[str]] = None,
         normalization_stats_path: Optional[str] = None,
@@ -132,6 +134,7 @@ class LiberoDataset(LeRobotV3Reader):
                 'set ["0-9"] for the canonical single-arm left-slot mapping'
             )
 
+        self.stereo = bool(stereo)
         self.action_mode = mode
         self._source_stats_path = str(normalization_stats_path) if normalization_stats_path else None
         self._state_normalization_stats: Optional[dict] = None
@@ -191,6 +194,13 @@ class LiberoDataset(LeRobotV3Reader):
 
     def _post_init(self, info: dict) -> None:
         features = info.get("features", {}) or {}
+        if self.stereo:
+            provenance = self._dataset_dir / "meta/stereo_provenance.json"
+            if not provenance.exists() or json.loads(provenance.read_text()).get("pairing") != "fresh-left+fresh-right":
+                raise ValueError("LIBERO stereo requires admitted fresh paired data")
+            for camera in (self._head_camera, self._left_wrist_camera, self._right_wrist_camera):
+                if camera and camera + "_right" not in features:
+                    raise ValueError(f"Missing right camera: {camera}")
         expected_size = (384, 320) if self._multiview else (256, 320)
         if (self._height, self._width) != expected_size:
             mode = "multiview" if self._multiview else "single-view"

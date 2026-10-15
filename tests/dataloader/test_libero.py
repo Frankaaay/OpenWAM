@@ -10,6 +10,35 @@ from openwam.dataloader.libero import LiberoDataset
 from openwam.dataloader.registry import DATASET_REGISTRY
 
 
+def test_stereo_decode_preserves_left_layout_and_requires_real_right(monkeypatch):
+    from PIL import Image
+    reader = object.__new__(LiberoDataset)
+    reader.stereo = True
+    reader._head_camera = 'head'
+    reader._left_wrist_camera = 'wrist'
+    reader._right_wrist_camera = None
+    reader._head_camera_choices = None
+    reader._multiview = True
+    reader._camera_layout = ['head', 'wrist', None]
+    reader._height, reader._width = 384, 320
+    reader._num_video_frames = 5
+    colors = {'head': 40, 'wrist': 80, 'head_right': 120, 'wrist_right': 160}
+    def decode(camera, *args, kind):
+        return [Image.fromarray(np.full((128,128,3),colors[camera],np.uint8))]
+    monkeypatch.setattr(reader, '_decode_one_camera', decode)
+    left = reader._decode_window_video(None,0,0,np.array([0]),0)
+    right = reader._decode_window_video(None,0,0,np.array([0]),0,camera_suffix='_right')
+    assert len(left) == len(right) == 5
+    assert np.asarray(left[0])[0,0,0] == 40
+    assert np.asarray(right[0])[0,0,0] == 120
+    assert np.asarray(left[0])[300,30,0] == 80
+    assert np.asarray(right[0])[300,30,0] == 160
+    assert np.asarray(right[0])[300,250,0] == 0
+    del colors['wrist_right']
+    with pytest.raises(KeyError):
+        reader._decode_window_video(None,0,0,np.array([0]),0,camera_suffix='_right')
+
+
 def test_canonical_config_and_registry_use_native_action_reader() -> None:
     config = yaml.safe_load(Path("configs/dataloader/libero.yaml").read_text(encoding="utf-8"))
     assert config["type"] == "libero"
