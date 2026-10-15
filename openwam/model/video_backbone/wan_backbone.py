@@ -756,6 +756,20 @@ class WanBase(VideoBackbone):
         """Unified train preprocessing: raw data (``frames``/``text``, optional
         ``vace_videos``/``ref_images`` in kw) → the denoising-loop input dict.
         """
+        right_frames = kw.get("right_frames")
+        requires_stereo = bool(getattr(self.video_encoder, "requires_stereo", False))
+        if requires_stereo and right_frames is None:
+            raise ValueError("Stereo encoder requires synchronized right_frames")
+        if right_frames is not None:
+            if not requires_stereo:
+                raise ValueError("right_frames supplied to a non-stereo encoder")
+            if len(right_frames) != len(frames):
+                raise ValueError("Left/right batch sizes differ")
+            for left, right in zip(frames, right_frames):
+                if len(left) != len(right) or not left:
+                    raise ValueError("Left/right clips must have equal nonzero frame counts")
+                if any(l.size != r.size for l, r in zip(left, right)):
+                    raise ValueError("Left/right frame resolutions differ")
         device = self.device
         dtype = self.dtype
 
@@ -782,7 +796,16 @@ class WanBase(VideoBackbone):
                 )
             )
         stacked_inputs = torch.cat(all_input_videos, dim=0)
-        input_latents = wan_encode.encode_video(stacked_inputs, vae=self.vae, encoder=self.video_encoder)
+        stereo_kwargs = {}
+        if right_frames is not None:
+            right_inputs = torch.cat([
+                wan_encode.preprocess_video(clip, encoder=self.video_encoder, dtype=dtype, device=device)
+                for clip in right_frames
+            ], dim=0)
+            stereo_kwargs["right_video_tensor"] = right_inputs
+        input_latents = wan_encode.encode_video(
+            stacked_inputs, vae=self.vae, encoder=self.video_encoder, **stereo_kwargs
+        )
         input_latents = input_latents.to(dtype=dtype, device=device)
 
         # Variant-specific first-frame / control conditioning lives in
@@ -1032,6 +1055,7 @@ class WanBase(VideoBackbone):
         wan_conditioning.finalize_ti2v_first_frame_latents(
             inputs_shared,
             first_frame_image,
+            right_first_frame_image=kw.get("right_first_frame_image"),
             is_ti2v=self._is_ti2v,
             encoder=self.video_encoder,
             vae=self.vae,
@@ -1062,7 +1086,7 @@ class Wan22Ti2v(WanBase):
             self._causal_temporal = bool(external_encoder.properties.causal_temporal)
 
     @classmethod
-    def from_pretrained(cls, source, *, external_encoder=None, text_dim: Optional[int] = None, **kw) -> "Wan22Ti2v":
+    def from_pretrained(cls, source, *, external_encoder=None, text_dim: Optional[int] = None, preserve_dit=False, **kw) -> "Wan22Ti2v":
         """Build a Wan22Ti2v from a source.
 
         Sources: ``DictConfig`` (full Hydra cfg → loader), ``str`` dir path /
@@ -1086,6 +1110,25 @@ class Wan22Ti2v(WanBase):
         )
 
         holder = loader.build_holder(source, skip_native_vae=skip_native_vae, **kw)
+
+        if external_encoder is not None and preserve_dit:
+            spec = external_encoder.properties
+            patch = tuple(spec.dit_patch_size)
+            dits = [d for d in (getattr(holder, "dit", None), getattr(holder, "dit2", None)) if d is not None]
+            if not dits:
+                raise ValueError("Wan-init encoder swap requires a loaded DiT")
+            for dit in dits:
+                projection = dit.patch_embedding
+                head = dit.head
+                if (tuple(dit.patch_size) != patch
+                    or tuple(projection.kernel_size) != patch
+                    or tuple(projection.stride) != patch
+                    or projection.in_channels != spec.z_dim
+                    or head.head.out_features != spec.z_dim * patch[0] * patch[1] * patch[2]
+                    or tuple(head.patch_size) != patch):
+                    raise ValueError("External encoder latent channels/patch do not match pretrained Wan DiT; weights were not reshaped or reset")
+            if spec.temporal_compression != 4 or not spec.causal_temporal or spec.spatial_compression != 16:
+                raise ValueError("Wan-init encoder swap requires native causal temporal/spatial compression (4, 16)")
 
         if external_encoder is not None:
             # (3) Division factors from the encoder spec, not a hardcoded ``* 2`` / Wan-VAE grid, else

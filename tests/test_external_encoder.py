@@ -870,7 +870,7 @@ def test_D2b_deploy_with_encoder_block_and_from_scratch_false_keeps_native_vae(m
     )
     assert backbone_kwargs.get("external_encoder") is None, (
         "deploy build_video_backbone must receive external_encoder=None on the "
-        "from_scratch=false path, regardless of yaml encoder block"
+        "from_scratch=false path with the native wan22_vae hint"
     )
 
 
@@ -2632,3 +2632,147 @@ def test_Y2_dinov3_save_deploy_assets_missing_cfg_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         enc.save_deploy_assets(str(tmp_path), cfg={})  # no encoder.model_path -> raise
     assert not (tmp_path / "dinov3").exists()
+
+
+def test_pretrained_wan_encoder_guard_preserves_weights():
+    """Exercise the production compatibility guard without loading 5B weights."""
+    import ast
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    source = Path(__file__).resolve().parents[1] / "openwam/model/video_backbone/wan_backbone.py"
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Wan22Ti2v")
+    method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "from_pretrained")
+    guard = next(n for n in method.body if isinstance(n, ast.If) and "preserve_dit" in ast.unparse(n.test))
+    code = compile(ast.fix_missing_locations(ast.Module(body=[guard], type_ignores=[])), str(source), "exec")
+    dit = nn.Module()
+    dit.patch_size = (1, 2, 2)
+    dit.patch_embedding = nn.Conv3d(48, 8, (1, 2, 2), stride=(1, 2, 2))
+    dit.head = nn.Module()
+    dit.head.patch_size = (1, 2, 2)
+    dit.head.head = nn.Linear(8, 192)
+    holder = SimpleNamespace(dit=dit, dit2=None)
+    before = {k: v.clone() for k, v in dit.state_dict().items()}
+    identities = {k: id(v) for k, v in dit.named_parameters()}
+    spec = dict(z_dim=48, dit_patch_size=(1, 2, 2), temporal_compression=4,
+                causal_temporal=True, spatial_compression=16)
+    for change in ({}, {"z_dim": 16}, {"dit_patch_size": (1, 1, 1)},
+                   {"spatial_compression": 8}, {"temporal_compression": 2},
+                   {"causal_temporal": False}):
+        encoder = SimpleNamespace(properties=SimpleNamespace(**{**spec, **change}))
+        namespace = dict(holder=holder, external_encoder=encoder, preserve_dit=True)
+        if change:
+            with pytest.raises(ValueError):
+                exec(code, namespace)
+        else:
+            exec(code, namespace)
+        assert identities == {k: id(v) for k, v in dit.named_parameters()}
+        assert all(torch.equal(before[k], v) for k, v in dit.state_dict().items())
+
+
+@pytest.mark.parametrize("deploy", [False, True])
+@pytest.mark.parametrize("from_scratch", [False, True])
+def test_explicit_external_encoder_initialization_routes(monkeypatch, deploy, from_scratch):
+    from openwam.model.video_backbone import encoder as enc_pkg
+    import openwam.model.video_backbone as vb_pkg
+    from openwam.model.video_backbone import registry
+
+    calls = []
+    codec = object()
+    class Backbone:
+        temporal_compression = 4
+        causal_temporal = True
+        @classmethod
+        def from_pretrained(cls, source, **kw):
+            calls.append(("build", source, kw))
+            return cls()
+        def reinit_for_from_scratch(self, **kw):
+            calls.append(("reset", kw))
+    monkeypatch.setitem(registry._VIDEO_BACKBONE_REGISTRY, "wan22_ti2v_5b", Backbone)
+    monkeypatch.setattr(vb_pkg, "build_video_backbone", registry.build_video_backbone)
+    monkeypatch.setattr(enc_pkg, "build_video_encoder", lambda cfg: codec)
+    monkeypatch.setattr(_StubArchitecture, "_build_external_encoder_skeleton",
+                        staticmethod(lambda cfg, source, **kw: codec), raising=False)
+    cfg = {"video_backbone": {"name": "wan22_ti2v_5b", "from_scratch": from_scratch,
+                              "encoder": {"name": "stereotok", "model_path": "/unused"}}}
+    if deploy:
+        cfg["video_backbone"]["_source"] = {"components": []}
+    _run_init_video_backbone(cfg)
+    build = calls[0]
+    assert build[0] == "build"
+    assert build[2]["external_encoder"] is codec
+    assert build[2].get("preserve_dit", False) == (not from_scratch)
+    assert sum(call[0] == "reset" for call in calls) == int(from_scratch)
+    if from_scratch:
+        assert calls[-1][1]["source"] == cfg["video_backbone"].get("_source")
+
+
+def test_stereo_encode_requires_and_forwards_real_pair():
+    import ast
+    from pathlib import Path
+    from types import SimpleNamespace
+    path = Path(__file__).resolve().parents[1] / "openwam/model/video_backbone/wan/encode.py"
+    tree = ast.parse(path.read_text())
+    fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "encode_video")
+    ns = {"torch": torch, "Tensor": torch.Tensor}
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[fn], type_ignores=[])), str(path), "exec"), ns)
+    encode = ns["encode_video"]
+    calls = []
+    def paired(left, *, right_video):
+        calls.append((left, right_video))
+        return left + right_video
+    codec = SimpleNamespace(requires_stereo=True, batch_encode=paired)
+    left, right = torch.zeros(1, 3, 5, 16, 16), torch.ones(1, 3, 5, 16, 16)
+    assert torch.equal(encode(left, vae=None, encoder=codec, right_video_tensor=right), right)
+    assert calls[0][0] is left and calls[0][1] is right
+    for bad in [None, right[:, :, :1], right.double(), torch.full_like(right, float("nan"))]:
+        with pytest.raises(ValueError):
+            encode(left, vae=None, encoder=codec, right_video_tensor=bad)
+    with pytest.raises(ValueError):
+        encode(left, vae=None, encoder=SimpleNamespace(), right_video_tensor=right)
+    native = SimpleNamespace(batch_encode=lambda x, device: x)
+    assert encode(left, vae=native) is left
+
+
+def test_stereo_ti2v_conditioning_uses_both_eyes():
+    import ast
+    from pathlib import Path
+    from types import SimpleNamespace
+    from PIL import Image
+
+    root = Path(__file__).resolve().parents[1] / "openwam/model/video_backbone/wan"
+    ns = {"torch": torch, "Tensor": torch.Tensor}
+    for filename, name in [("encode.py", "encode_video"),
+                           ("conditioning.py", "finalize_ti2v_first_frame_latents")]:
+        path = root / filename
+        tree = ast.parse(path.read_text())
+        fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name)
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[fn], type_ignores=[])), str(path), "exec"), ns)
+    calls = []
+    left = Image.new("RGB", (16, 16), color="black")
+    right = Image.new("RGB", (16, 16), color="white")
+    def preprocess(frames, **kw):
+        calls.append(frames)
+        return torch.full((1, 3, len(frames), 16, 16), float(frames[0].getpixel((0, 0))[0]))
+    ns["wan_encode"] = SimpleNamespace(preprocess_video=preprocess, encode_video=ns["encode_video"])
+    codec = SimpleNamespace(requires_stereo=True, batch_encode=lambda x, right_video: x + right_video)
+    kw = dict(is_ti2v=True, encoder=codec, vae=None, dtype=torch.float32, device="cpu")
+    finalize = ns["finalize_ti2v_first_frame_latents"]
+    shared = {}
+    finalize(shared, left, right_first_frame_image=right, **kw)
+    assert shared["first_frame_latents"].eq(255).all()
+    assert calls == [[right], [left]]
+    for l, r in [(left, None), (None, right), (left, []),
+                 ([left, left], right), (left, Image.new("RGB", (32, 16)))]:
+        with pytest.raises(ValueError):
+            finalize({}, l, right_first_frame_image=r, **kw)
+    with pytest.raises(ValueError):
+        finalize({}, left, right_first_frame_image=right, **dict(kw, encoder=None))
+    native = SimpleNamespace(batch_encode=lambda x, device: x)
+    shared = {}
+    finalize(shared, left, **dict(kw, encoder=None, vae=native))
+    assert shared["first_frame_latents"].eq(0).all()
+    finalize(shared, None, **dict(kw, encoder=None, vae=native))
+    assert "first_frame_latents" not in shared
+    assert shared["fuse_vae_embedding_in_latents"] is False

@@ -1,9 +1,9 @@
 """Pluggable video encoder subsystem.
 
-Only activated when ``video_backbone.from_scratch=true`` AND
-``video_backbone.encoder`` is set in yaml. Under any other combination the
-backbone keeps using its built-in ``pipe.vae`` and the encoder package is
-inert (registration still runs, but no encoder is instantiated).
+Explicit external encoders also support pretrained Wan22 TI2V initialization
+when their latent geometry matches the existing DiT. ``from_scratch`` controls
+weight reinitialization independently. The ``wan22_vae`` configuration hint
+keeps the native VAE path when ``from_scratch=false``.
 
 This package is the public facade. The pieces live in dedicated modules:
   - ``base`` — :class:`VideoEncoder` ABC + :class:`VideoEncoderProperties`
@@ -42,6 +42,7 @@ __all__ = [
     "FluxVAEVideoEncoder",
     "VJEPA21VideoEncoder",
     "WanVideoVAEEncoder",
+    "StereoTokVideoEncoder",
     "build_video_encoder",
     "register_video_encoder",
     "_VIDEO_ENCODER_REGISTRY",
@@ -54,3 +55,4 @@ from openwam.model.video_backbone.encoder.dinov3 import DinoV3VideoEncoder  # no
 from openwam.model.video_backbone.encoder.flux2_vae import FluxVAEVideoEncoder  # noqa: E402, F401
 from openwam.model.video_backbone.encoder.vjepa21 import VJEPA21VideoEncoder  # noqa: E402, F401
 from openwam.model.video_backbone.encoder.wan22_vae import WanVideoVAEEncoder  # noqa: E402, F401
+from openwam.model.video_backbone.encoder.stereotok import StereoTokVideoEncoder  # noqa: E402, F401

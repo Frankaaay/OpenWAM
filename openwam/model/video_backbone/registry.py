@@ -78,8 +78,14 @@ def build_video_backbone(
         available = ", ".join(sorted(_VIDEO_BACKBONE_REGISTRY)) or "(none)"
         raise KeyError(f"Unknown video backbone '{name}'. Available: {available}")
 
+    vb_cfg = cfg.get("video_backbone", {}) if isinstance(cfg, dict) else getattr(cfg, "video_backbone", {})
+    from_scratch = vb_cfg.get("from_scratch", False) if isinstance(vb_cfg, dict) else getattr(vb_cfg, "from_scratch", False)
+    preserve_dit = external_encoder is not None and not bool(from_scratch)
+    if preserve_dit and name != "wan22_ti2v_5b":
+        raise ValueError("Pretrained external encoder swaps currently require wan22_ti2v_5b")
+    extra = {"preserve_dit": True} if preserve_dit else {}
     if source is not None:
-        kw: Dict[str, Any] = {}
+        kw: Dict[str, Any] = dict(extra)
         if device is not None:
             kw["device"] = device
         if ckpt_dir is not None:
@@ -93,8 +99,8 @@ def build_video_backbone(
         return cls.from_pretrained(source, **kw)
     if external_encoder is not None:
         if text_dim is not None:
-            return cls.from_pretrained(cfg, external_encoder=external_encoder, text_dim=int(text_dim))
-        return cls.from_pretrained(cfg, external_encoder=external_encoder)
+            return cls.from_pretrained(cfg, external_encoder=external_encoder, text_dim=int(text_dim), **extra)
+        return cls.from_pretrained(cfg, external_encoder=external_encoder, **extra)
     if text_dim is not None:
         return cls.from_pretrained(cfg, text_dim=int(text_dim))
     return cls.from_pretrained(cfg)

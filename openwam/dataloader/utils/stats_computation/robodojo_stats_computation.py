@@ -138,6 +138,7 @@ def compute_robodojo_stats(
     variant: str = ROBODOJO_SIM_VARIANT,
     action_mode: str = DEPLOY_ACTION_MODE,
     reservoir_cap: int = DEFAULT_RESERVOIR_CAP,
+    lerobot_eef_paths: Sequence[str] | None = None,
 ) -> dict:
     """Compute bounded pooled raw-20D statistics across selected formal tasks."""
     if action_mode != DEPLOY_ACTION_MODE:
@@ -154,7 +155,13 @@ def compute_robodojo_stats(
         resolved_calibration = None
     else:
         resolved_calibration = resolve_robodojo_calibration(calibration)
-    tasks = resolve_robodojo_tasks(
+    source = None
+    if lerobot_eef_paths is not None:
+        from openwam.dataloader.robodojo_lerobot import RoboDojoLeRobotSource
+        if variant != ROBODOJO_SIM_VARIANT or tasks is not None:
+            raise ValueError('Published RoboDojo statistics require sim and all tasks')
+        source = RoboDojoLeRobotSource(dataset_dir, lerobot_eef_paths)
+    tasks = source.tasks if source is not None else resolve_robodojo_tasks(
         dataset_dir,
         tasks=tasks,
         embodiment=embodiment,
@@ -168,27 +175,26 @@ def compute_robodojo_stats(
     )
     state_rows = 0
     action_rows = 0
-    for task in tasks:
-        episode_paths = discover_episodes(
-            dataset_dir,
-            task,
-            embodiment=embodiment,
-            variant=variant,
-        )
-        for states in iter_episode_eef20(
-            episode_paths,
-            resolved_calibration,
-            variant=variant,
-            embodiment=embodiment,
-        ):
-            states = np.asarray(states, dtype=np.float32).reshape(-1, EEF20_DIM)
-            if states.shape[0] < 2:
-                raise ValueError(f"cannot compute RoboDojo stats from an episode with {states.shape[0]} state rows")
-            targets = states[1:]
-            accumulator.update_batch(states)
-            accumulator.update_batch(targets)
-            state_rows += states.shape[0]
-            action_rows += targets.shape[0]
+    def state_batches():
+        if source is not None:
+            for index in range(len(source.episodes)):
+                yield read_calibrated_eef20(source.read_states(index), resolved_calibration,
+                                           variant=variant, embodiment=embodiment)
+        else:
+            for task in tasks:
+                yield from iter_episode_eef20(discover_episodes(dataset_dir, task,
+                    embodiment=embodiment, variant=variant), resolved_calibration,
+                    variant=variant, embodiment=embodiment)
+
+    for states in state_batches():
+        states = np.asarray(states, dtype=np.float32).reshape(-1, EEF20_DIM)
+        if states.shape[0] < 2:
+            raise ValueError(f"cannot compute RoboDojo stats from an episode with {states.shape[0]} state rows")
+        targets = states[1:]
+        accumulator.update_batch(states)
+        accumulator.update_batch(targets)
+        state_rows += states.shape[0]
+        action_rows += targets.shape[0]
 
     if state_rows == 0 or action_rows == 0 or accumulator.count == 0:
         raise ValueError("cannot compute RoboDojo stats from an empty dataset")
@@ -307,6 +313,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         dataset_dir=dataset_dir,
         output=output,
         embodiment=str(config.get("embodiment", ROBODOJO_EMBODIMENT)),
+        lerobot_eef_paths=config.get("lerobot_eef_paths"),
         variant=str(config.get("variant", ROBODOJO_SIM_VARIANT)),
         action_mode=str(config.get("action_mode", DEPLOY_ACTION_MODE)),
         reservoir_cap=args.reservoir_cap,

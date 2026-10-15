@@ -689,6 +689,7 @@ class RoboDojoDataset(BaseDataset):
         unify_action_map: Any = None,
         unify_state_map: Any = None,
         color_jitter: Any = None,
+        lerobot_eef_paths: Sequence[str] | None = None,
     ):
         super().__init__()
         if action_mode != DEPLOY_ACTION_MODE:
@@ -769,7 +770,21 @@ class RoboDojoDataset(BaseDataset):
             self.contract_id = ROBODOJO_CONTRACT_ID
 
         supplied_root = Path(data_root)
-        if supplied_root.name == "data":
+        self._lerobot_source = None
+        if lerobot_eef_paths is not None:
+            from openwam.dataloader.robodojo_lerobot import RoboDojoLeRobotSource
+            if variant != ROBODOJO_SIM_VARIANT or task_name not in (None, 'all'):
+                raise ValueError('Published RoboDojo source requires sim and all tasks')
+            if normalize_mode is not None and normalization_stats_path is None:
+                raise ValueError('Published RoboDojo requires explicitly bound EEF normalization stats')
+            self._lerobot_source = RoboDojoLeRobotSource(supplied_root, lerobot_eef_paths)
+            formal_dataset_root = supplied_root
+            self.data_root = str(supplied_root)
+            self.task_name = 'all'
+            episode_paths = [self._lerobot_source.data_path(i)
+                             for i in range(len(self._lerobot_source.episodes))]
+            normalization_stats_tasks = self._lerobot_source.tasks
+        elif supplied_root.name == "data":
             if dataset_root is None or not task_name:
                 raise ValueError(
                     "formal RoboDojo provenance requires explicit dataset_root "
@@ -813,7 +828,11 @@ class RoboDojoDataset(BaseDataset):
         self.dataset_root = str(formal_dataset_root)
 
         # Validate the complete discovered corpus before split/index selection.
-        all_metadata = [validate_robodojo_episode(path, variant=variant) for path in episode_paths]
+        if self._lerobot_source is None:
+            all_metadata = [validate_robodojo_episode(path, variant=variant) for path in episode_paths]
+        else:
+            all_metadata = [dict(length=ep['length'], instruction=ep['tasks'][0])
+                            for ep in self._lerobot_source.episodes]
         selected_indices = list(range(len(episode_paths)))
         if not selected_indices:
             raise ValueError(f"no RoboDojo episodes selected for split={split!r}")
@@ -954,19 +973,26 @@ class RoboDojoDataset(BaseDataset):
                 f"RoboDojo window start={start} has no real next-state target for episode length {episode_length}"
             )
 
-        with h5py.File(path, "r") as handle:
-            states = read_calibrated_eef20(
-                handle,
-                self.calibration,
-                start,
-                start + actual_length,
-                variant=self.variant,
-                embodiment=self.embodiment,
-            )
-            sampled_video = []
-            for relative_index in self._video_sample_indices:
-                source_index = start + relative_index if relative_index < actual_length else episode_length - 1
-                sampled_video.append(self._video_at(handle, source_index))
+        if self._lerobot_source is not None:
+            states = read_calibrated_eef20(self._lerobot_source.read_states(episode_index),
+                self.calibration, start, start + actual_length,
+                variant=self.variant, embodiment=self.embodiment)
+            indices = [min(start + offset, episode_length - 1) for offset in self._video_sample_indices]
+            cameras = self.camera_layout if self.multiview else (self.target_camera,)
+            images = self._lerobot_source.read_frames(episode_index, indices, cameras)
+            sampled_video = [assemble_multiview_layout(
+                {camera: images[camera][i] for camera in cameras}, list(cameras), self.height, self.width)
+                if self.multiview else crop_and_resize(images[self.target_camera][i], self.height, self.width)
+                for i in range(len(indices))]
+        else:
+            with h5py.File(path, "r") as handle:
+                states = read_calibrated_eef20(
+                    handle, self.calibration, start, start + actual_length,
+                    variant=self.variant, embodiment=self.embodiment)
+                sampled_video = []
+                for relative_index in self._video_sample_indices:
+                    source_index = start + relative_index if relative_index < actual_length else episode_length - 1
+                    sampled_video.append(self._video_at(handle, source_index))
 
         if actual_length < self.num_frames:
             states = np.concatenate(
@@ -1085,6 +1111,7 @@ class MultiTaskRoboDojoDataset(BaseDataset):
             unify_action_map=_config_get(config, "unify_action_map", None),
             unify_state_map=_config_get(config, "unify_state_map", None),
             color_jitter=_config_get(config, "color_jitter", None),
+            lerobot_eef_paths=_config_get(config, "lerobot_eef_paths", None),
         )
 
     def __init__(
@@ -1098,6 +1125,7 @@ class MultiTaskRoboDojoDataset(BaseDataset):
         normalization_stats_path: str | Path | None = None,
         action_mode: str = DEPLOY_ACTION_MODE,
         robot: str | None = None,
+        lerobot_eef_paths: Sequence[str] | None = None,
         **dataset_kwargs,
     ):
         super().__init__()
@@ -1110,7 +1138,7 @@ class MultiTaskRoboDojoDataset(BaseDataset):
         if variant == ROBODOJO_REAL_VARIANT and calibration is not None:
             raise ValueError("RoboDojo_real uses native per-arm base poses; calibration must be None")
 
-        selected_tasks = resolve_robodojo_tasks(
+        selected_tasks = ['all'] if lerobot_eef_paths is not None else resolve_robodojo_tasks(
             dataset_dir,
             embodiment=embodiment,
             variant=variant,
@@ -1134,6 +1162,8 @@ class MultiTaskRoboDojoDataset(BaseDataset):
         requested_normalize_mode = _normalize_mode(dataset_kwargs.get("normalize_mode", "min-max"))
         normalization_stats_tasks = None
         if requested_normalize_mode is not None and normalization_stats_path is None:
+            if lerobot_eef_paths is not None:
+                raise ValueError('Published RoboDojo requires explicitly bound EEF normalization stats')
             normalization_stats_path = ensure_robodojo_stats(
                 dataset_dir,
                 variant=variant,
@@ -1147,14 +1177,14 @@ class MultiTaskRoboDojoDataset(BaseDataset):
         self._cumulative_lengths: list[int] = []
         cumulative = 0
         for task in selected_tasks:
-            episodes = discover_episodes(
+            episodes = None if lerobot_eef_paths is not None else discover_episodes(
                 dataset_dir,
                 task,
                 embodiment=embodiment,
                 variant=variant,
             )
             dataset = RoboDojoDataset(
-                data_root=episodes[0].parent,
+                data_root=dataset_dir if episodes is None else episodes[0].parent,
                 dataset_root=dataset_dir,
                 calibration=calibration,
                 task_name=task,
@@ -1165,6 +1195,7 @@ class MultiTaskRoboDojoDataset(BaseDataset):
                 action_mode=action_mode,
                 normalization_stats_path=normalization_stats_path,
                 normalization_stats_tasks=normalization_stats_tasks,
+                lerobot_eef_paths=lerobot_eef_paths,
                 **dataset_kwargs,
             )
             self._sub_datasets.append(dataset)

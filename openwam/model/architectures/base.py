@@ -205,15 +205,9 @@ class BaseWAMArchitecture(ABC, nn.Module):
 
         Both paths flow through the public :func:`build_video_backbone`.
 
-        Optional ``video_backbone.encoder`` block (yaml-whitelisted to
-        ``{name, model_path}``) swaps the backbone's native VAE for an
-        external :class:`VideoEncoder`. The encoder block is **only** read
-        when ``video_backbone.from_scratch=true`` — the DiT must be
-        reinitialized when its latent space changes. When the block is set
-        but ``from_scratch=false`` we silently route through the native
-        ``pipe.vae`` (with an INFO log explaining what happened) so that the
-        default yaml's documentation-friendly ``encoder:`` block doesn't
-        break the default training command.
+        An explicit external encoder swaps the native VAE. With from_scratch
+        disabled, the Wan backbone validates its existing DiT projections and
+        preserves all loaded DiT weights. The default wan22_vae hint stays inert.
         """
         from openwam.model.video_backbone import build_video_backbone
 
@@ -225,88 +219,26 @@ class BaseWAMArchitecture(ABC, nn.Module):
         vb_name = vb_cfg.get("name") if isinstance(vb_cfg, dict) else getattr(vb_cfg, "name", None)
         from_scratch = bool(self._cfg_get(vb_cfg, "from_scratch", False))
 
-        # ------------------------------------------------------------------
-        # External encoder gate. Four cases, only one of which builds an
-        # encoder:
-        #   - encoder set + from_scratch=true  → build external encoder
-        #   - encoder set + from_scratch=false → INFO log + skip (silent
-        #     ignore is the right UX since the default yaml ships an
-        #     encoder: block for documentation discoverability, and we
-        #     don't want the default training command to fail)
-        #   - encoder unset + from_scratch=true → reset DiT weights only
-        #   - encoder unset + from_scratch=false → no-op (default path)
-        # ------------------------------------------------------------------
-        enc_cfg = vb_cfg.get("encoder") if isinstance(vb_cfg, dict) else getattr(vb_cfg, "encoder", None)
+        enc_cfg = self._cfg_get(vb_cfg, "encoder", None)
+        enc_name = str(self._cfg_get(enc_cfg, "name", "")) if enc_cfg is not None else ""
         external_encoder = None
-        # Single gate, identical for training and deploy: encoder block is
-        # honored ONLY when ``from_scratch=true``. The framework yamls ship
-        # an inline ``encoder:`` block for discoverability even at default
-        # ``from_scratch=false`` — that block must be
-        # silently ignored on both paths so default training and deploy of
-        # ``from_scratch=false`` checkpoints (state_dict topology
-        # ``_pipe.vae.*``) keep working bit-exactly.
-        if enc_cfg is not None and from_scratch:
+        # Keep the documentation-only native VAE block inert. Explicit external
+        # encoders can retain Wan initialization when their actual I/O fits.
+        use_external = enc_cfg is not None and (from_scratch or enc_name not in ("", "wan22_vae"))
+        if use_external:
+            if not from_scratch and vb_name != "wan22_ti2v_5b":
+                raise ValueError("Pretrained external encoder swaps currently require wan22_ti2v_5b")
             if source is None:
-                # Training: build the encoder from yaml + model_path.
                 from openwam.model.video_backbone.encoder import build_video_encoder
 
                 external_encoder = build_video_encoder(enc_cfg)
             else:
-                # Deploy: reconstruct the encoder skeleton from the saved
-                # components entry; weights filled in by the architecture's
-                # subsequent ``load_checkpoint`` strict load. ``source`` is
-                # the dict produced by deploy/model_loader.py. ``_ckpt_dir``
-                # is plumbed onto ``vb_cfg`` by model_loader and forwarded
-                # to :meth:`VideoEncoder.from_skeleton` so each encoder can
-                # consult the checkpoint-local artifacts that its
-                # :meth:`VideoEncoder.save_deploy_assets` wrote at save
-                # time. For example, V-JEPA 2.1 prefers
-                # ``<ckpt_dir>/manifest.json`` with a fallback to
-                # ``encoder.model_path``. The user-side weight directory does
-                # not need to be reachable on the deploy host.
-                ckpt_dir_for_encoder = (
-                    vb_cfg.get("_ckpt_dir") if isinstance(vb_cfg, dict) else getattr(vb_cfg, "_ckpt_dir", None)
+                external_encoder = self._build_external_encoder_skeleton(
+                    enc_cfg, source, ckpt_dir=self._cfg_get(vb_cfg, "_ckpt_dir", None)
                 )
-                external_encoder = self._build_external_encoder_skeleton(enc_cfg, source, ckpt_dir=ckpt_dir_for_encoder)
+
         elif enc_cfg is not None and source is None:
-            # Training with encoder block set but from_scratch=false. Two
-            # sub-cases:
-            #   (a) ``encoder.name == "wan22_vae"`` (the default-yaml template
-            #       value) — stay silent (INFO only). Native ``pipe.vae``
-            #       and the wan22_vae external encoder are bit-identical, so
-            #       nothing is lost; the default yaml ships the
-            #       ``encoder:`` block as a discoverable hint and
-            #       fail-fast here would break every default config.
-            #   (b) ``encoder.name`` is anything else (``vjepa21`` /
-            #       ``dinov3`` / ...) — that is an explicit
-            #       choice that *cannot* take effect under
-            #       ``from_scratch=false``: the pre-trained DiT's first
-            #       conv channels are bound to the native Wan VAE's
-            #       ``z_dim`` and there is no way to wire a different
-            #       encoder's latent space through without re-initializing
-            #       the DiT. Silently INFO-logging would produce a Wan-VAE
-            #       run that *looks* like a V-JEPA run from the yaml, so
-            #       fail-fast.
-            enc_name = ""
-            if isinstance(enc_cfg, dict):
-                enc_name = str(enc_cfg.get("name", ""))
-            else:
-                enc_name = str(getattr(enc_cfg, "name", ""))
-            if enc_name and enc_name != "wan22_vae":
-                raise ValueError(
-                    f"video_backbone.encoder.name='{enc_name}' is incompatible "
-                    "with from_scratch=false: the pre-trained DiT's first conv "
-                    "channels are bound to native Wan VAE's z_dim and cannot "
-                    "consume a different encoder's latent space. Set "
-                    "from_scratch=true to activate the encoder swap (and re-init "
-                    "the DiT), or remove the encoder block to keep the native "
-                    "Wan VAE path."
-                )
-            logger.info(
-                "video_backbone.encoder is set but from_scratch=false; "
-                "encoder block IGNORED, using native pipe.vae. Set from_scratch=true "
-                "to activate the encoder swap."
-            )
+            logger.info("video_backbone.encoder block IGNORED; using native pipe.vae")
 
         text_dim = self._cfg_get(cfg, "text_dim", None)
         text_dim = None if text_dim in (None, 0) else int(text_dim)
@@ -893,6 +825,7 @@ class BaseWAMArchitecture(ABC, nn.Module):
         _device = self.device
 
         all_frames: list = []
+        all_right_frames: list = []
         all_prompts: list = []
         all_vace_videos: list = []
         all_ref_images: list = []
@@ -904,6 +837,7 @@ class BaseWAMArchitecture(ABC, nn.Module):
 
         for sample in samples:
             all_frames.append(sample["video"])
+            all_right_frames.append(sample.get("right_video"))
             all_prompts.append(sample["prompt"])
             all_vace_videos.append(sample.get("vace_video"))
             all_ref_images.append(sample.get("first_frame_image"))
@@ -963,7 +897,13 @@ class BaseWAMArchitecture(ABC, nn.Module):
         if any(ref_flags) and not all(ref_flags):
             raise ValueError("Mixed reference images in batch: all samples must be consistent.")
 
+        stereo_kwargs = {}
+        if any(frames is not None for frames in all_right_frames):
+            if any(frames is None for frames in all_right_frames):
+                raise ValueError("Mixed stereo batch: every sample must provide right_video")
+            stereo_kwargs["right_frames"] = all_right_frames
         preprocessed = self.preprocess(
+            **stereo_kwargs,
             frames=all_frames,
             text=all_prompts,
             vace_videos=all_vace_videos,
@@ -1365,6 +1305,7 @@ class BaseWAMArchitecture(ABC, nn.Module):
         *,
         vace_video=None,
         first_frame_image=None,
+        right_first_frame_image=None,
         num_frames: int = 49,
         action_num_frames: Optional[int] = None,
         height: int = 384,
@@ -1448,6 +1389,7 @@ class BaseWAMArchitecture(ABC, nn.Module):
             prompt=prompt,
             vace_video=vace_video,
             first_frame_image=first_frame_image,
+            **({"right_first_frame_image": right_first_frame_image} if right_first_frame_image is not None else {}),
             num_frames=num_frames,
             height=height,
             width=width,

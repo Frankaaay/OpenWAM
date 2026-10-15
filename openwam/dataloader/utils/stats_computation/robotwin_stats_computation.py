@@ -357,6 +357,27 @@ def compute_normalization_stats(data_root: str) -> dict:
     return result
 
 
+def compute_published_robotwin_stats(dataset_dir: str, manifest_path: str) -> dict:
+    """Use the admitted manifest and the reader's wxyz conversion without skips."""
+    from openwam.dataloader.robotwin import RoboTwinDataset
+
+    reader = RoboTwinDataset(dataset_dir, manifest_path=manifest_path,
+                            normalize_mode=None, action_mode='eef', multiview=True)
+    accumulator = _ModeAccumulator(_EEF_ACTION_DIM)
+    for path, length in zip(reader._episode_files, reader._episode_lengths):
+        with h5py.File(path, 'r') as handle:
+            states = reader._read_eef_actions(handle, 0, length).astype(np.float64)
+        if states.shape != (length, _EEF_ACTION_DIM) or not np.isfinite(states).all():
+            raise ValueError(f'Invalid published EEF states: {path}')
+        accumulator.update(states)
+    with open(manifest_path, 'rb') as stream:
+        digest = hashlib.sha256(stream.read()).hexdigest()
+    return {'eef': _pin_eef_rot6d_identity(accumulator.finalize()),
+            'num_timesteps': accumulator.total_count,
+            'metadata': {'manifest_sha256': digest, 'native_quaternion': 'wxyz',
+                         'episodes': len(reader._episode_files), 'pool': 'all_states'}}
+
+
 def compute_multitask_robotwin_stats(
     dataset_dir: str,
     embodiment: str,
@@ -554,7 +575,15 @@ def main():
     tasks = parse_tasks_file(args.tasks_file) if args.tasks_file else None
     output = args.output
 
-    if data_root:
+    published = cfg.get('manifest_path')
+    if published:
+        if not dataset_dir or not output or data_root or tasks:
+            parser.error('Published stats require dataset_dir and explicit output, without task filtering')
+        if os.path.exists(output):
+            raise FileExistsError(output)
+        resolved_output = output
+        stats = compute_published_robotwin_stats(dataset_dir, published)
+    elif data_root:
         # Single-task CLI (debugging aid): stats have no canonical
         # per-task location any more, so the caller must name the output.
         if not output:
@@ -578,7 +607,8 @@ def main():
     _print_summary(stats)
     os.makedirs(os.path.dirname(resolved_output) or ".", exist_ok=True)
     atomic_save_stats_npy(resolved_output, stats)
-    cleanup_partial_stats_checkpoint(resolved_output)
+    if not published:
+        cleanup_partial_stats_checkpoint(resolved_output)
     print(f"\nSaved stats ({stats.get('num_timesteps', 0)} timesteps) to {resolved_output}")
 
 

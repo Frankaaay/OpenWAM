@@ -91,12 +91,18 @@ def build_deploy_i2v_y(
     return y
 
 
-def finalize_ti2v_first_frame_latents(inputs_shared: dict, first_frame_image, *, is_ti2v, encoder, vae, dtype, device):
+def finalize_ti2v_first_frame_latents(inputs_shared: dict, first_frame_image, *, is_ti2v, encoder, vae, dtype, device,
+                                    right_first_frame_image=None):
     """Emit ``first_frame_latents`` for TI2V deploy: its ``seperated_timestep``
     DiT needs both ``fuse_vae_embedding_in_latents=True`` AND ``first_frame_latents``
     so frame-0 tokens get t=0 and base.generate can clean-replace ``latents[:, :, 0:1]``.
     VACE/I2V skip this — their first-frame rides ``vace_context`` / ``y``.
     """
+    requires_stereo = bool(getattr(encoder, "requires_stereo", False))
+    if right_first_frame_image is not None and (not requires_stereo or not is_ti2v):
+        raise ValueError("Right first frame requires a stereo TI2V encoder")
+    if requires_stereo and (first_frame_image is None or right_first_frame_image is None):
+        raise ValueError("Stereo TI2V conditioning requires both first-frame eyes")
     if not is_ti2v or first_frame_image is None:
         if first_frame_image is None:
             inputs_shared.pop("first_frame_latents", None)
@@ -106,8 +112,17 @@ def finalize_ti2v_first_frame_latents(inputs_shared: dict, first_frame_image, *,
     inputs_shared["fuse_vae_embedding_in_latents"] = True
     inputs_shared["num_clean_prefix_frames"] = 0
     ref_frames = first_frame_image if isinstance(first_frame_image, list) else [first_frame_image]
+    right_tensor = None
+    if right_first_frame_image is not None:
+        right_frames = right_first_frame_image if isinstance(right_first_frame_image, list) else [right_first_frame_image]
+        if not ref_frames or len(ref_frames) != len(right_frames):
+            raise ValueError("Left/right conditioning frame counts must match and be nonzero")
+        if any(left.size != right.size for left, right in zip(ref_frames, right_frames)):
+            raise ValueError("Left/right conditioning frame sizes must match")
+        right_tensor = wan_encode.preprocess_video(right_frames, encoder=encoder, dtype=dtype, device=device).to(device)
     ref_tensor = wan_encode.preprocess_video(ref_frames, encoder=encoder, dtype=dtype, device=device)
-    ref_image_latents = wan_encode.encode_video(ref_tensor.to(device), vae=vae, encoder=encoder).to(
+    ref_image_latents = wan_encode.encode_video(ref_tensor.to(device), vae=vae, encoder=encoder,
+                                               right_video_tensor=right_tensor).to(
         dtype=dtype, device=device
     )
     inputs_shared["first_frame_latents"] = ref_image_latents

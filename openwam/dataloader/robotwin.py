@@ -10,6 +10,7 @@ Classes:
 """
 
 import glob
+import hashlib
 import json
 import os
 import random
@@ -297,11 +298,31 @@ class RoboTwinDataset(BaseDataset):
         # (default). Truthy → enabled; a dict overrides
         # the per-channel strengths {brightness, contrast, saturation, hue}.
         color_jitter: Optional[Any] = None,
+        manifest_path: Optional[str] = None,
+        stereo: bool = False,
     ):
         super().__init__()
         self.embodiment = embodiment
         self.variant = variant
         self.action_mode = action_mode
+        self.stereo = stereo
+        self._manifest = None
+        if manifest_path is not None:
+            with open(manifest_path, encoding="utf-8") as stream:
+                self._manifest = json.load(stream)
+            if self._manifest.get("native_quaternion") != "wxyz":
+                raise ValueError("Published RoboTwin manifest must declare native wxyz poses")
+            records = self._manifest["episodes"]
+            if not records or any(e["length"] < 2 or not e["seen_instructions"] for e in records):
+                raise ValueError("Every published episode needs actions and seen instructions")
+            if len({e["path"] for e in records}) != len(records):
+                raise ValueError("Duplicate published episode paths")
+            if sum(e["length"] for e in records) != self._manifest["frames"]:
+                raise ValueError("Published frame count mismatch")
+            if sum(e["length"] - 1 for e in records) != self._manifest["windows"]:
+                raise ValueError("Published window count mismatch")
+        if stereo and (self._manifest is None or not multiview or (height, width) != (384, 320)):
+            raise ValueError("StereoTok RoboTwin requires the published manifest and 384x320 three-camera layout")
         self._unify_action = bool(unify_action)
         self._unify_action_map = unify_action_map
         if unify_state_map is not None and list(unify_state_map) != list(self._unify_action_map or ()):
@@ -310,6 +331,16 @@ class RoboTwinDataset(BaseDataset):
                 "this reader's state shares the action's raw layout"
             )
         self.normalize_mode = normalize_mode if normalize_mode not in ("", "none", "null") else None
+        if self._manifest is not None and self.normalize_mode is not None:
+            if not normalization_stats_path or not os.path.isfile(normalization_stats_path):
+                raise FileNotFoundError("Published reader requires explicit normalization stats")
+            if load_mode_stats(normalization_stats_path, action_mode) is None:
+                raise ValueError("Published normalization stats lack the selected action mode")
+            stats_metadata = np.load(normalization_stats_path, allow_pickle=True).item().get('metadata', {})
+            with open(manifest_path, 'rb') as stream:
+                manifest_sha = hashlib.sha256(stream.read()).hexdigest()
+            if stats_metadata.get('manifest_sha256') != manifest_sha:
+                raise ValueError('Normalization stats must bind the selected published manifest')
 
         # ── load-time video augmentation ──────────────────────────────────
         # Color jitter is applied in __getitem__ to the decoded clip (same
@@ -380,6 +411,8 @@ class RoboTwinDataset(BaseDataset):
         # ---- Discover and sort target episode files ----
         pattern = os.path.join(data_root, "episode*.hdf5")
         all_files = sorted(glob.glob(pattern))
+        if self._manifest is not None:
+            all_files = [os.path.join(data_root, ep["path"]) for ep in self._manifest["episodes"]]
         if not all_files:
             raise FileNotFoundError(f"No episode*.hdf5 files found in {data_root}")
 
@@ -390,9 +423,17 @@ class RoboTwinDataset(BaseDataset):
         self._episode_lengths = []
         self._action_dim_detected = None
 
-        for path in self._episode_files:
+        for ep_index, path in enumerate(self._episode_files):
             with h5py.File(path, "r") as f:
                 T = f[f"observation/{target_camera}/rgb"].shape[0]
+                if self._manifest is not None:
+                    if T != self._manifest["episodes"][ep_index]["length"]:
+                        raise ValueError(f"Published episode length mismatch: {path}")
+                    for camera in self.cameras:
+                        keys = [camera, camera + "_right"] if stereo else [camera]
+                        for key in keys:
+                            if f[f"observation/{key}/rgb"].shape[0] != T:
+                                raise ValueError(f"Camera length mismatch: {path}: {key}")
                 self._episode_lengths.append(T)
 
                 if self._action_dim_detected is None:
@@ -699,6 +740,9 @@ class RoboTwinDataset(BaseDataset):
         pure helper so tests and downstream adapters don't need a fully
         constructed ``RoboTwinDataset`` to reproduce training-time prompts.
         """
+        if self._manifest is not None:
+            pool = self._manifest["episodes"][ep_idx]["seen_instructions"]
+            return format_prompt_for_inference(random.choice(pool) if self.split == "train" else pool[0])
         return _resolve_prompt(
             instructions=self._instructions,
             ep_file=self._episode_files[ep_idx],
@@ -721,7 +765,7 @@ class RoboTwinDataset(BaseDataset):
         left = np.concatenate(
             [
                 left_ep[:, :3],
-                quat_xyzw_to_rotation_6d(left_ep[:, 3:]),
+                quat_xyzw_to_rotation_6d(left_ep[:, [4, 5, 6, 3]] if self._manifest is not None else left_ep[:, 3:]),
                 left_grip[:, None] if left_grip.ndim == 1 else left_grip,
             ],
             axis=-1,
@@ -730,7 +774,7 @@ class RoboTwinDataset(BaseDataset):
         right = np.concatenate(
             [
                 right_ep[:, :3],
-                quat_xyzw_to_rotation_6d(right_ep[:, 3:]),
+                quat_xyzw_to_rotation_6d(right_ep[:, [4, 5, 6, 3]] if self._manifest is not None else right_ep[:, 3:]),
                 right_grip[:, None] if right_grip.ndim == 1 else right_grip,
             ],
             axis=-1,
@@ -774,11 +818,23 @@ class RoboTwinDataset(BaseDataset):
             else:
                 raw_frames = self._read_camera_frames(f, self.target_camera, start, actual_raw_end)
             raw_actions = self._read_raw_actions(f, start, actual_raw_end)
+            right_frames = None
+            if self.stereo:
+                per_camera = {
+                    cam: self._read_camera_frames(f, cam + "_right", start, actual_raw_end)
+                    for cam in self.cameras
+                }
+                right_frames = [assemble_multiview_layout(
+                    {cam: per_camera[cam][t] for cam in self.cameras},
+                    self.camera_layout, self.height, self.width,
+                ) for t in range(actual_raw_len)]
 
         # Pad to full window if the episode ended early
         if actual_raw_len < self._raw_window_len:
             pad_len = self._raw_window_len - actual_raw_len
             raw_frames = raw_frames + [raw_frames[-1]] * pad_len
+            if right_frames is not None:
+                right_frames += [right_frames[-1]] * pad_len
             raw_actions = np.concatenate(
                 [raw_actions, np.repeat(raw_actions[-1:], pad_len, axis=0)],
                 axis=0,
@@ -839,7 +895,7 @@ class RoboTwinDataset(BaseDataset):
         action_tensor = torch.from_numpy(action_np)
         proprio_tensor = torch.from_numpy(proprio_np)
 
-        return {
+        sample = {
             "video": sampled_video,
             "vace_video": None,
             "first_frame_image": [sampled_video[0]],
@@ -857,6 +913,11 @@ class RoboTwinDataset(BaseDataset):
             "task_name": self.task_name,
             "active_arm": active_arm,
         }
+        if right_frames is not None:
+            sample["right_video"] = [right_frames[i] for i in self._video_sample_indices]
+        if self._manifest is not None:
+            sample["task_name"] = self._manifest["episodes"][ep_idx]["task"]
+        return sample
 
     def __getitem__(self, idx):
         ep_idx, start = self._window_index[idx]
@@ -864,7 +925,11 @@ class RoboTwinDataset(BaseDataset):
         sample = self._build_sample(ep_idx, start)
         if self._color_jitter is not None:
             # Same jitter factors across the whole clip (temporal consistency).
-            sample["video"] = self._color_jitter.apply({"video": sample["video"]})["video"]
+            count = len(sample["video"])
+            augmented = self._color_jitter.apply({"video": sample["video"] + sample.get("right_video", [])})["video"]
+            sample["video"] = augmented[:count]
+            if "right_video" in sample:
+                sample["right_video"] = augmented[count:]
             # Keep the first-frame conditioning image in sync with the jittered clip.
             sample["first_frame_image"] = [sample["video"][0]]
         return sample
@@ -938,6 +1003,8 @@ class MultiTaskRoboTwinDataset(BaseDataset):
             unify_action_map=_get("unify_action_map", None),
             unify_state_map=_get("unify_state_map", None),
             color_jitter=_get("color_jitter", None),
+            manifest_path=_get("manifest_path", None),
+            stereo=bool(_get("stereo", False)),
         )
 
     def __init__(
@@ -952,6 +1019,22 @@ class MultiTaskRoboTwinDataset(BaseDataset):
     ):
         super().__init__()
         self.action_mode = action_mode
+
+        if kwargs.get("manifest_path") is not None:
+            if tasks is not None or variant != "clean_50":
+                raise ValueError("Published manifest uses its complete clean-only episode list")
+            if kwargs.get("normalize_mode", "min-max") is not None and not normalization_stats_path:
+                raise ValueError("Published reader requires explicit model-specific normalization stats")
+            ds = RoboTwinDataset(data_root=dataset_dir, embodiment=embodiment, variant=variant,
+                                 normalization_stats_path=normalization_stats_path,
+                                 action_mode=action_mode, **kwargs)
+            self._sub_datasets = [ds]
+            self._cumulative_lengths = [len(ds)]
+            self._total_length = len(ds)
+            self._normalization_stats_shared = ds.normalization_stats
+            self._action_dim_value = ds.action_dim
+            self.normalization_stats_path = ds.normalization_stats_path
+            return
 
         # ---- Resolve variant(s) ----
         if variant == "both":

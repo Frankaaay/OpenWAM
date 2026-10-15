@@ -54,7 +54,20 @@ def preprocess_video(frames, *, encoder=None, dtype, device) -> Tensor:
     return _preprocess_video_native(frames, dtype=dtype, device=device)
 
 
-def encode_video(video_tensor: Tensor, *, vae, encoder=None) -> Tensor:
+def encode_video(video_tensor: Tensor, *, vae, encoder=None, right_video_tensor=None) -> Tensor:
+    requires_stereo = bool(getattr(encoder, "requires_stereo", False))
+    if requires_stereo:
+        if right_video_tensor is None:
+            raise ValueError("Stereo encoder requires a right-eye tensor")
+        if video_tensor.ndim != 5 or video_tensor.shape != right_video_tensor.shape or video_tensor.shape[1] != 3:
+            raise ValueError("Expected matching [B,3,T,H,W] left/right tensors")
+        if video_tensor.device != right_video_tensor.device or video_tensor.dtype != right_video_tensor.dtype:
+            raise ValueError("Left/right tensor dtype and device must match")
+        if not torch.isfinite(video_tensor).all() or not torch.isfinite(right_video_tensor).all():
+            raise ValueError("Nonfinite stereo pixels")
+        return encoder.batch_encode(video_tensor, right_video=right_video_tensor)
+    if right_video_tensor is not None:
+        raise ValueError("Right-eye tensor supplied to a non-stereo encoder")
     if encoder is not None:
         return encoder.batch_encode(video_tensor)
     return vae.batch_encode(video_tensor, device=video_tensor.device)
