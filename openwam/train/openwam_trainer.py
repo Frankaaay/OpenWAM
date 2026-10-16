@@ -372,7 +372,7 @@ class OpenWAMTrainer:
                     save_weights(self.accelerator, self.architecture, output_path, global_step, final=False)
                     if save_full_states_for_resume:
                         save_full_state(self.accelerator, output_path, global_step, opt_step, epoch)
-                    if is_main and not save_full_states_for_resume:
+                    if is_main:
                         manage_checkpoints(output_path, keep_last_k)
 
                 if max_steps and global_step >= max_steps:
@@ -679,7 +679,10 @@ class OpenWAMTrainer:
         if save_steps:
             save_weights(self.accelerator, self.architecture, output_path, global_step, final=True)
         self.accelerator.wait_for_everyone()
-        if is_main and not bool(getattr(self.cfg.training, "save_full_states_for_resume", False)):
-            finalize_keep_weights_only(output_path, keep_last_k)
+        if is_main:
+            if bool(getattr(self.cfg.training, "save_full_states_for_resume", False)):
+                manage_checkpoints(output_path, keep_last_k)
+            else:
+                finalize_keep_weights_only(output_path, keep_last_k)
         if wandb_run is not None:
             wandb_run.finish()

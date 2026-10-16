@@ -126,7 +126,8 @@ def test_manage_checkpoints_prunes_accel_state_in_lockstep(tmp_path):
     weights = sorted(p.name for p in tmp_path.glob("checkpoint_step_*"))
     states = sorted(p.name for p in tmp_path.glob("accel_state_step_*"))
     assert weights == ["checkpoint_step_200.safetensors", "checkpoint_step_300.safetensors"]
-    assert states == ["accel_state_step_200", "accel_state_step_300"]
+    assert states == ["accel_state_step_300"]
+    assert (tmp_path / states[0] / 'trainer_state.json').is_file()
 
 
 # --- save/load_full_state metadata round-trip + atomic completion marker ---

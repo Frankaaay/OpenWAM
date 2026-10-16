@@ -357,7 +357,7 @@ def manage_checkpoints(output_dir: str, keep_last_k: int):
     (resume state, dirs) in lockstep so a kept weights file always retains its
     sibling state dir.
     """
-    import shutil
+    from pathlib import Path
 
     files = _glob.glob(os.path.join(output_dir, "checkpoint_step_*"))
     files.sort(key=lambda p: step_num(p, "checkpoint_step_"))
@@ -367,12 +367,19 @@ def manage_checkpoints(output_dir: str, keep_last_k: int):
             os.remove(old)
             logger.info("Removed old checkpoint: %s", old)
 
-    state_dirs = [p for p in _glob.glob(os.path.join(output_dir, "accel_state_step_*")) if os.path.isdir(p)]
+    state_dirs = [p for p in _glob.glob(os.path.join(output_dir, "accel_state_step_*"))
+                  if os.path.isdir(p) and not os.path.islink(p)
+                  and os.path.isfile(os.path.join(p, 'trainer_state.json'))]
     state_dirs.sort(key=lambda p: step_num(p, "accel_state_step_"))
-    while len(state_dirs) > keep_last_k:
+    while len(state_dirs) > 1:
         old = state_dirs.pop(0)
         try:
-            shutil.rmtree(old)
+            for path in sorted(Path(old).rglob('*'), key=lambda p: len(p.parts), reverse=True):
+                if path.is_file() or path.is_symlink():
+                    path.unlink()
+                elif path.is_dir():
+                    path.rmdir()
+            Path(old).rmdir()
             logger.info("Removed old accelerate state dir: %s", old)
         except OSError as e:
             logger.warning("Failed to remove old accelerate state dir %s: %s", old, e)
