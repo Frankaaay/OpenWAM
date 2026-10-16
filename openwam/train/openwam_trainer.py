@@ -290,6 +290,7 @@ class OpenWAMTrainer:
                     skip_first,
                 )
 
+        last_checkpoint_bucket = global_step // save_steps if save_steps else 0
         _step_t0 = _time.monotonic()
         pbar = tqdm(total=total_steps, desc="Training", unit="step", initial=min(global_step, total_steps))
 
@@ -305,11 +306,18 @@ class OpenWAMTrainer:
                 dataloader.set_epoch(epoch)
             if hasattr(self.dataset, "set_epoch"):
                 self.dataset.set_epoch(epoch)
-            # On the resumed epoch, skip the batches already consumed before the checkpoint.
+            # Recreate the same worker seeds and replay consumed batches so prompt
+            # sampling and augmentation RNG match, including worker prefetch.
+            if self._run_seed is not None:
+                for generator in (getattr(dataloader, "generator", None),
+                                  getattr(dataloader, "synchronized_generator", None)):
+                    if generator is not None:
+                        generator.manual_seed(per_step_seed(self._run_seed, rank=self._rank, step=epoch))
+            # On the resumed epoch, replay batches already consumed before the checkpoint.
             if epoch == start_epoch and skip_first > 0:
-                from accelerate import skip_first_batches
-
-                epoch_iter = skip_first_batches(dataloader, skip_first)
+                epoch_iter = iter(dataloader)
+                for _ in range(skip_first):
+                    next(epoch_iter)
             else:
                 epoch_iter = dataloader
             for batch in epoch_iter:
@@ -359,11 +367,12 @@ class OpenWAMTrainer:
 
                 # save_steps: write the weights line (+ the resumable full state when
                 # save_full_states_for_resume=true), then prune in lockstep.
-                if save_steps and global_step > 0 and global_step % save_steps == 0:
+                if save_steps and global_step // save_steps > last_checkpoint_bucket and self.accelerator.sync_gradients:
+                    last_checkpoint_bucket = global_step // save_steps
                     save_weights(self.accelerator, self.architecture, output_path, global_step, final=False)
                     if save_full_states_for_resume:
                         save_full_state(self.accelerator, output_path, global_step, opt_step, epoch)
-                    if is_main:
+                    if is_main and not save_full_states_for_resume:
                         manage_checkpoints(output_path, keep_last_k)
 
                 if max_steps and global_step >= max_steps:
@@ -539,8 +548,10 @@ class OpenWAMTrainer:
         # Align global_step to the grad_accum boundary skip was floored to, then derive
         # opt_step from it — otherwise floored-off batches re-train and per-step seeds
         # (keyed on global_step) drift. No-op at grad_accum=1.
-        start_epoch, skip, global_step = compute_resume_position(global_step, len(dataloader), grad_accum)
-        opt_step = global_step // grad_accum
+        start_epoch, skip, aligned_step = compute_resume_position(global_step, len(dataloader), grad_accum)
+        if aligned_step != global_step:
+            raise ValueError("Checkpoint was not saved at an optimizer boundary")
+        opt_step = int(meta["opt_step"])
         if is_main:
             logger.info(
                 "[resume] resumed at global_step=%d opt_step=%d epoch=%d skip_first=%d",
@@ -668,7 +679,7 @@ class OpenWAMTrainer:
         if save_steps:
             save_weights(self.accelerator, self.architecture, output_path, global_step, final=True)
         self.accelerator.wait_for_everyone()
-        if is_main:
+        if is_main and not bool(getattr(self.cfg.training, "save_full_states_for_resume", False)):
             finalize_keep_weights_only(output_path, keep_last_k)
         if wandb_run is not None:
             wandb_run.finish()

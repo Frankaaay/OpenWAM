@@ -248,12 +248,16 @@ def load_full_state(accelerator, state_dir: str) -> dict:
     """
     import json
 
-    accelerator.load_state(state_dir)
     meta_path = os.path.join(state_dir, "trainer_state.json")
-    if os.path.isfile(meta_path):
-        with open(meta_path) as f:
-            return json.load(f)
-    return {"global_step": 0, "opt_step": 0, "epoch": 0}
+    if not os.path.isfile(meta_path):
+        raise FileNotFoundError(f"Incomplete full-state checkpoint: {state_dir}")
+    with open(meta_path) as f:
+        meta = json.load(f)
+    if not all(k in meta for k in ("global_step", "opt_step", "epoch")):
+        raise ValueError(f"Invalid trainer state: {meta_path}")
+    accelerator.load_state(state_dir)
+    return meta
+
 
 
 # --- Discovery (locate latest step) ---
