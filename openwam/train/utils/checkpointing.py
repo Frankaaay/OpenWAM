@@ -256,6 +256,15 @@ def load_full_state(accelerator, state_dir: str) -> dict:
     if not all(k in meta for k in ("global_step", "opt_step", "epoch")):
         raise ValueError(f"Invalid trainer state: {meta_path}")
     accelerator.load_state(state_dir)
+    # CPU offload replaces AdamW with CPUAdam. State loading replaces its
+    # param_groups; an external scheduler must update the actual optimizer.
+    from accelerate.utils import DistributedType
+    if accelerator.distributed_type == DistributedType.DEEPSPEED:
+        from accelerate.scheduler import AcceleratedScheduler
+        for wrapped in accelerator._schedulers:
+            if type(wrapped) is AcceleratedScheduler:
+                zero_optimizer = wrapped.optimizers[0].optimizer
+                wrapped.scheduler.optimizer = zero_optimizer.optimizer
     return meta
 
 
