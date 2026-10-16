@@ -46,7 +46,7 @@ def main():
             assert len(x)==len(y)
             for i,(a,b) in enumerate(zip(x,y)):equal(a,b,path+"/"+str(i))
         elif hasattr(x, "__dict__"):equal(vars(x),vars(y),path)
-        else:assert x==y
+        elif x!=y:differences.append(dict(path=path,expected=str(x),actual=str(y)))
     equal(expected,actual,"batches_losses");equal(weights,accelerator.unwrap_model(model).state_dict(),"weights");equal(optimizer,optim.state_dict(),"optimizer");equal(lr,scheduler.state_dict(),"lr")
     if differences:
         torch.save(dict(expected=optimizer,actual=optim.state_dict()),root/f"optimizer-diff-rank{accelerator.process_index}.pt")
