@@ -33,17 +33,25 @@ def main():
     meta=load_full_state(accelerator,find_latest_accel_state(str(root)))
     assert meta==dict(global_step=2,opt_step=2,epoch=0)
     actual=[update() for _ in range(4)]
-    def equal(x,y):
-        if isinstance(x,torch.Tensor):assert torch.equal(x.cpu(),y.cpu())
+    differences=[]
+    def equal(x,y,path="root"):
+        if isinstance(x,torch.Tensor):
+            if not torch.equal(x.cpu(),y.cpu()):
+                a=x.detach().cpu();b=y.detach().cpu();different=(a!=b).flatten().nonzero().flatten()
+                differences.append(dict(path=path,shape=list(a.shape),count=len(different),indices=different[:20].tolist(),max_abs=float((a-b).abs().max())))
         elif isinstance(x,dict):
             assert x.keys()==y.keys()
-            for k in x:equal(x[k],y[k])
+            for k in x:equal(x[k],y[k],path+"/"+str(k))
         elif isinstance(x,(list,tuple)):
             assert len(x)==len(y)
-            for a,b in zip(x,y):equal(a,b)
-        elif hasattr(x, "__dict__"):equal(vars(x),vars(y))
+            for i,(a,b) in enumerate(zip(x,y)):equal(a,b,path+"/"+str(i))
+        elif hasattr(x, "__dict__"):equal(vars(x),vars(y),path)
         else:assert x==y
-    equal(expected,actual);equal(weights,accelerator.unwrap_model(model).state_dict());equal(optimizer,optim.state_dict());equal(lr,scheduler.state_dict())
+    equal(expected,actual,"batches_losses");equal(weights,accelerator.unwrap_model(model).state_dict(),"weights");equal(optimizer,optim.state_dict(),"optimizer");equal(lr,scheduler.state_dict(),"lr")
+    if differences:
+        torch.save(dict(expected=optimizer,actual=optim.state_dict()),root/f"optimizer-diff-rank{accelerator.process_index}.pt")
+        (root/f"differences-rank{accelerator.process_index}.json").write_text(json.dumps(differences,indent=2))
+        raise AssertionError(json.dumps(differences))
     incomplete=root/'accel_state_step_99';
     if accelerator.is_main_process: incomplete.mkdir()
     accelerator.wait_for_everyone()
