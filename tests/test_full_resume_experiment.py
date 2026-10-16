@@ -27,8 +27,9 @@ def main():
     save_full_state(accelerator,str(root),2,2,0)
     expected=[update() for _ in range(4)]
     weights={k:v.clone().cpu() for k,v in accelerator.unwrap_model(model).state_dict().items()}
-    import copy
-    optimizer=copy.deepcopy(optim.state_dict());lr=copy.deepcopy(scheduler.state_dict())
+    import copy, io
+    buffer=io.BytesIO();torch.save(optim.state_dict(),buffer);buffer.seek(0)
+    optimizer=torch.load(buffer,weights_only=False);lr=copy.deepcopy(scheduler.state_dict())
     meta=load_full_state(accelerator,find_latest_accel_state(str(root)))
     assert meta==dict(global_step=2,opt_step=2,epoch=0)
     actual=[update() for _ in range(4)]
@@ -40,6 +41,7 @@ def main():
         elif isinstance(x,(list,tuple)):
             assert len(x)==len(y)
             for a,b in zip(x,y):equal(a,b)
+        elif hasattr(x, "__dict__"):equal(vars(x),vars(y))
         else:assert x==y
     equal(expected,actual);equal(weights,accelerator.unwrap_model(model).state_dict());equal(optimizer,optim.state_dict());equal(lr,scheduler.state_dict())
     incomplete=root/'accel_state_step_99';
