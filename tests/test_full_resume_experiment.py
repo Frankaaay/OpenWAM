@@ -23,7 +23,12 @@ def main():
         loss=(model(x.to(next(model.parameters()).dtype)).float()-y).square().mean()
         accelerator.backward(loss);optim.step();scheduler.step();optim.zero_grad()
         return x.cpu(),loss.detach().cpu()
+    import io
+    def snapshot(value):
+        buffer=io.BytesIO();torch.save(value,buffer);buffer.seek(0)
+        return torch.load(buffer,weights_only=False)
     for _ in range(2):update()
+    saved_optimizer=snapshot(optim.state_dict())
     save_full_state(accelerator,str(root),2,2,0)
     expected=[update() for _ in range(4)]
     weights={k:v.clone().cpu() for k,v in accelerator.unwrap_model(model).state_dict().items()}
@@ -32,6 +37,7 @@ def main():
     optimizer=torch.load(buffer,weights_only=False);lr=copy.deepcopy(scheduler.state_dict())
     meta=load_full_state(accelerator,find_latest_accel_state(str(root)))
     assert meta==dict(global_step=2,opt_step=2,epoch=0)
+    restored_optimizer=snapshot(optim.state_dict())
     actual=[update() for _ in range(4)]
     differences=[]
     def equal(x,y,path="root"):
@@ -47,8 +53,15 @@ def main():
             for i,(a,b) in enumerate(zip(x,y)):equal(a,b,path+"/"+str(i))
         elif hasattr(x, "__dict__"):equal(vars(x),vars(y),path)
         elif x!=y:differences.append(dict(path=path,expected=str(x),actual=str(y)))
-    equal(expected,actual,"batches_losses");equal(weights,accelerator.unwrap_model(model).state_dict(),"weights");equal(optimizer,optim.state_dict(),"optimizer");equal(lr,scheduler.state_dict(),"lr")
-    if differences:
+    equal(saved_optimizer,restored_optimizer,"restored_optimizer");equal(expected,actual,"batches_losses");equal(weights,accelerator.unwrap_model(model).state_dict(),"weights");equal(optimizer,optim.state_dict(),"optimizer");equal(lr,scheduler.state_dict(),"lr")
+    # CPUAdam computes beta powers with pow() on a resumed step, versus
+    # repeated FP32 multiplication in uninterrupted execution (cpu_adam.h).
+    # Checkpoint restoration, moments, LR, loss and bf16 weights stay exact;
+    # only subsequent FP32 master updates may differ by <= two FP32 eps.
+    unexpected=[d for d in differences if not (
+        d['path'].startswith('optimizer/single_partition_of_fp32_groups/')
+        and d.get('max_abs',float('inf')) <= 2*torch.finfo(torch.float32).eps)]
+    if unexpected:
         torch.save(dict(expected=optimizer,actual=optim.state_dict()),root/f"optimizer-diff-rank{accelerator.process_index}.pt")
         (root/f"differences-rank{accelerator.process_index}.json").write_text(json.dumps(differences,indent=2))
         raise AssertionError(json.dumps(differences))
@@ -59,7 +72,7 @@ def main():
     try:load_full_state(accelerator,str(incomplete))
     except FileNotFoundError:pass
     else:raise AssertionError('Incomplete checkpoint accepted')
-    result=dict(passed=True,device=str(accelerator.device),mixed_precision='bf16',save_step=2,resumed_updates=4,exact=['rng','loss','weights','adamw','lr','progress'],incomplete_rejected=True,world_size=accelerator.num_processes,zero_stage=2 if use_ds else None,scope='small model; actual Accelerate checkpoint methods')
+    result=dict(passed=True,device=str(accelerator.device),mixed_precision='bf16',save_step=2,resumed_updates=4,exact=['rng','loss','bf16_weights','adam_moments','lr','progress','checkpoint_optimizer'],incomplete_rejected=True,fp32_master_roundoff=differences,checkpoint_optimizer_exact=True,world_size=accelerator.num_processes,zero_stage=2 if use_ds else None,scope='small model; actual Accelerate checkpoint methods')
     if accelerator.is_main_process:
         (root/'result.json').write_text(json.dumps(result,indent=2));print(json.dumps(result))
 if __name__=='__main__':main()

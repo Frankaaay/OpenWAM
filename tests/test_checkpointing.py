@@ -134,6 +134,7 @@ def test_manage_checkpoints_prunes_accel_state_in_lockstep(tmp_path):
 
 class _FakeAccelerator:
     is_main_process = True
+    distributed_type = "NO"
 
     def wait_for_everyone(self):
         pass
