@@ -371,7 +371,7 @@ def manage_checkpoints(output_dir: str, keep_last_k: int):
                   if os.path.isdir(p) and not os.path.islink(p)
                   and os.path.isfile(os.path.join(p, 'trainer_state.json'))]
     state_dirs.sort(key=lambda p: step_num(p, "accel_state_step_"))
-    while len(state_dirs) > 1:
+    while len(state_dirs) > keep_last_k:
         old = state_dirs.pop(0)
         try:
             for path in sorted(Path(old).rglob('*'), key=lambda p: len(p.parts), reverse=True):
