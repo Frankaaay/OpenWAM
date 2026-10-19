@@ -15,23 +15,61 @@ class _Model:
 
 
 def test_robotwin_endpose_conversion_matches_dataset_eef_layout():
-    left = np.array([0.1, 0.2, 0.3, 0.0, 0.0, 0.0, 1.0], dtype=np.float32)
-    right = np.array([0.4, 0.5, 0.6, 0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+    left = np.array([0.1, 0.2, 0.3, 1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    right = np.array([0.4, 0.5, 0.6, 0.5, 0.5, 0.5, 0.5], dtype=np.float32)
 
     eef = action_conversion.robotwin_endpose_to_eef20d(left, right, 0.25, 0.75)
     expected = np.concatenate(
         [
             left[:3],
-            quat_xyzw_to_rotation_6d(left[3:]),
+            quat_xyzw_to_rotation_6d(left[[4, 5, 6, 3]]),
             np.array([0.25], dtype=np.float32),
             right[:3],
-            quat_xyzw_to_rotation_6d(right[3:]),
+            quat_xyzw_to_rotation_6d(right[[4, 5, 6, 3]]),
             np.array([0.75], dtype=np.float32),
         ]
     ).astype(np.float32)
 
     assert eef.shape == (20,)
     np.testing.assert_allclose(eef, expected, atol=1e-6)
+
+
+@pytest.mark.parametrize("angles", [[0, 0, 0], [0.3, -0.8, 1.2], [2.8, 0.1, -1.9]])
+def test_native_robotwin_pose_roundtrip_through_eval(angles):
+    from scipy.spatial.transform import Rotation
+
+    quat_xyzw = Rotation.from_euler("xyz", angles).as_quat()
+    native_pose = np.r_[[0.1, 0.2, 0.3], quat_xyzw[[3, 0, 1, 2]]]
+    observation = {
+        "endpose": {"left_endpose": native_pose, "right_endpose": native_pose,
+                    "left_gripper": 0.25, "right_gripper": 0.75},
+        "observation": {"head_camera": {"rgb": np.zeros((2, 2, 3), np.uint8)}},
+    }
+    expected_r6 = Rotation.from_quat(quat_xyzw).as_matrix()[:, :2].T.reshape(6)
+    model = _Model("ee")
+
+    def step(example):
+        np.testing.assert_allclose(example["state"][3:9], expected_r6, atol=1e-6)
+        return example["state"]  # Request the same physical pose.
+
+    model.step = step
+
+    class Env:
+        take_action_cnt = 1
+
+        def get_instruction(self):
+            return "hold pose"
+
+        def take_action(self, action, action_type):
+            assert action_type == "ee"
+            for arm, grip in ((action[:8], 0.25), (action[8:], 0.75)):
+                np.testing.assert_allclose(arm[:3], native_pose[:3], atol=1e-6)
+                # SAPIEN/transforms3d reads wxyz; compare matrices to allow q/-q.
+                actual = Rotation.from_quat(arm[[4, 5, 6, 3]]).as_matrix()
+                np.testing.assert_allclose(actual, Rotation.from_quat(quat_xyzw).as_matrix(), atol=1e-6)
+                assert arm[7] == grip
+
+    iface.eval(Env(), model, observation)
 
 
 def test_ee_action_type_sends_20d_eef_proprio():

@@ -457,6 +457,9 @@ def eval(TASK_ENV, model: ModelClient, observation: dict) -> None:
     # EEF mode: convert 20D (xyz+rot6d+grip)×2 → 16D (xyz+quat+grip)×2.
     if model._action_type == "ee" and len(action) == 20:
         action = action_conversion.eef20d_to_ee16d(action)
+        # The shared converter returns xyzw; RoboTwin's native planner uses
+        # transforms3d/SAPIEN wxyz. Keep this conversion at the robot boundary.
+        action = action[[0, 1, 2, 6, 3, 4, 5, 7, 8, 9, 10, 14, 11, 12, 13, 15]]
 
     context = nullcontext() if _BENCHMARK_RNG_DOMAIN is None else _BENCHMARK_RNG_DOMAIN.activate()
     with context:
