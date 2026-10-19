@@ -32,6 +32,27 @@ from openwam.model.video_backbone.encoder import (
     register_video_encoder,
 )
 
+
+def test_stereotok_mono_mode_survives_factory_and_deploy_metadata(monkeypatch, tmp_path):
+    import json
+    from fastwam.models.wan22 import stereotok_vae
+    from openwam.model.video_backbone.encoder.stereotok import StereoTokVideoEncoder
+
+    class Codec(nn.Module):
+        def __init__(self, path, device, input_mode):
+            super().__init__()
+            self.requires_stereo = input_mode == 'stereo'
+            self.binding = {'input_mode': input_mode,
+                            'sha256': '61c6057b49bec9c52f96793a20247d3746978939f0551c37142bdbda6b252eae'}
+
+    monkeypatch.setattr(stereotok_vae, 'StereoTokVAE', Codec)
+    monkeypatch.setattr(torch, 'load', lambda *a, **kw: {'geometry': {}})
+    encoder = build_video_encoder({'name': 'stereotok', 'model_path': 'unused', 'input_mode': 'mono-left'})
+    assert isinstance(encoder, StereoTokVideoEncoder)
+    assert not encoder.requires_stereo
+    encoder.save_deploy_assets(tmp_path, {})
+    assert json.loads((tmp_path / 'stereotok.json').read_text())['binding']['input_mode'] == 'mono-left'
+
 # ---------------------------------------------------------------------------
 # Mock encoders for the ABC/registry/spec layer (no real weights needed).
 # ---------------------------------------------------------------------------

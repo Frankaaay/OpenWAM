@@ -19,6 +19,7 @@ class StereoTokVideoEncoder(VideoEncoder):
     def __init__(self, codec, geometry):
         super().__init__()
         self._m = codec
+        self.requires_stereo = codec.requires_stereo
         self.geometry = geometry
         self.train(False)
 
@@ -54,10 +55,10 @@ class StereoTokVideoEncoder(VideoEncoder):
         return [_vae_output_to_image(frame) for frame in video_tensor[0].permute(1, 2, 3, 0)]
 
     @classmethod
-    def from_pretrained(cls, model_path: str):
+    def from_pretrained(cls, model_path: str, input_mode="stereo"):
         from fastwam.models.wan22.stereotok_vae import StereoTokVAE
 
-        codec = StereoTokVAE(model_path, "cpu")
+        codec = StereoTokVAE(model_path, "cpu", input_mode=input_mode)
         if codec.binding["sha256"] != "61c6057b49bec9c52f96793a20247d3746978939f0551c37142bdbda6b252eae":
             raise ValueError("StereoTok requires the selected u15853 export SHA256")
         # mmap reads only structural metadata here; the codec already strict-loaded weights.
@@ -88,6 +89,12 @@ class StereoTokVideoEncoder(VideoEncoder):
         codec = StereoTokVAE.__new__(StereoTokVAE)
         torch.nn.Module.__init__(codec)
         codec.binding = metadata["binding"]
+        input_mode = codec.binding.get("input_mode", "stereo")
+        if input_mode not in ("stereo", "mono-left"):
+            raise ValueError("Invalid StereoTok deployment input mode")
+        if encoder_cfg is not None and encoder_cfg.get("input_mode", "stereo") != input_mode:
+            raise ValueError("StereoTok deployment config and checkpoint input modes differ")
+        codec.requires_stereo = input_mode == "stereo"
         with torch.device("meta"):
             model = make_vae()
             model.fusion = LAS2GuidedFusion(
