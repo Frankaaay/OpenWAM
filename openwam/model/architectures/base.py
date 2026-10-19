@@ -27,6 +27,7 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from types import MethodType
 from typing import TYPE_CHECKING, Any, Optional, Tuple, Union
 
 import numpy as np
@@ -40,14 +41,16 @@ def _wrap_single_forward(module: nn.Module) -> None:
     """Wrap a single module's ``forward`` in ``torch.no_grad``. Idempotent."""
     if getattr(module, "_openwam_no_grad_wrapped", False):
         return
-    original_forward = module.forward
+    module._openwam_original_forward = module.forward
 
-    @functools.wraps(original_forward)
-    def wrapped(*args, **kwargs):
+    @functools.wraps(module.forward)
+    def wrapped(self, *args, **kwargs):
         with torch.no_grad():
-            return original_forward(*args, **kwargs)
+            return self._openwam_original_forward(*args, **kwargs)
 
-    module.forward = wrapped
+    # Bound methods are rebound by deepcopy; a closure over module.forward
+    # would keep calling the source module and bypass optimizations on the copy.
+    module.forward = MethodType(wrapped, module)
     module._openwam_no_grad_wrapped = True
 
 

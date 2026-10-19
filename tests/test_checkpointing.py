@@ -31,6 +31,47 @@ def _make_accel_state(root: Path, step: int, *, marker: bool) -> Path:
 # --- find_latest_weights ---
 
 
+def test_resume_sequential_lr_rebinds_children_and_restores_curve(tmp_path):
+    import json
+    import math
+    from types import SimpleNamespace
+
+    import torch
+    from accelerate.scheduler import AcceleratedScheduler
+    from accelerate.utils import DistributedType
+    from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
+
+    discarded = torch.optim.AdamW([torch.nn.Parameter(torch.zeros(1))], lr=1e-4)
+    warmup = LinearLR(discarded, start_factor=1 / 12000, total_iters=12000)
+    cosine = CosineAnnealingLR(discarded, T_max=228000, eta_min=1e-6)
+    scheduler = SequentialLR(discarded, [warmup, cosine], milestones=[12000])
+    # Actual step-10000 checkpoint affected by the old top-level-only rebind.
+    scheduler.last_epoch = 80000
+    cosine.last_epoch = 68000
+    cosine._step_count = 68002
+    scheduler._last_lr = cosine._last_lr = [8.027568230216999e-8]
+    actual = torch.optim.AdamW([torch.nn.Parameter(torch.zeros(1))], lr=8.59807344018383e-5)
+    wrapped = AcceleratedScheduler.__new__(AcceleratedScheduler)
+    wrapped.scheduler = scheduler
+    wrapped.optimizers = [SimpleNamespace(optimizer=SimpleNamespace(optimizer=actual))]
+    accelerator = SimpleNamespace(
+        distributed_type=DistributedType.DEEPSPEED,
+        _schedulers=[wrapped],
+        load_state=lambda _: None,
+    )
+    metadata = dict(global_step=10000, opt_step=10000, epoch=2)
+    (tmp_path / "trainer_state.json").write_text(json.dumps(metadata))
+
+    assert load_full_state(accelerator, str(tmp_path)) == metadata
+    assert all(s.optimizer is actual for s in (scheduler, warmup, cosine))
+    expected = lambda step: 1e-6 + (1e-4 - 1e-6) * (1 + math.cos(math.pi * (step - 1500) / 28500)) / 2
+    assert abs(actual.param_groups[0]["lr"] - expected(10000)) < 1e-12
+    assert scheduler.get_last_lr() == cosine.get_last_lr() == [actual.param_groups[0]["lr"]]
+    for _ in range(8):
+        scheduler.step()
+    assert abs(actual.param_groups[0]["lr"] - expected(10001)) < 1e-12
+
+
 def test_find_latest_weights_picks_highest_step(tmp_path):
     for s in (100, 200, 300):
         (tmp_path / f"checkpoint_step_{s}.safetensors").write_text("x")

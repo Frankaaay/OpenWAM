@@ -264,7 +264,30 @@ def load_full_state(accelerator, state_dir: str) -> dict:
         for wrapped in accelerator._schedulers:
             if type(wrapped) is AcceleratedScheduler:
                 zero_optimizer = wrapped.optimizers[0].optimizer
-                wrapped.scheduler.optimizer = zero_optimizer.optimizer
+                optimizer = zero_optimizer.optimizer
+                scheduler = wrapped.scheduler
+                pending = [scheduler]
+                while pending:
+                    current = pending.pop()
+                    current.optimizer = optimizer
+                    pending.extend(getattr(current, "_schedulers", ()))
+                # Our warmup/cosine recipe uses SequentialLR. Older checkpoints
+                # may contain a stale optimizer LR and a child scheduler that
+                # advanced against the discarded optimizer. Restore the curve
+                # from its saved phase, rather than continuing that stale LR.
+                from bisect import bisect_right
+                from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
+
+                if isinstance(scheduler, SequentialLR):
+                    active = scheduler._schedulers[bisect_right(scheduler._milestones, scheduler.last_epoch)]
+                    if isinstance(active, (LinearLR, CosineAnnealingLR)):
+                        restored_lrs = active._get_closed_form_lr()
+                        previous_lrs = [group["lr"] for group in optimizer.param_groups]
+                        for group, lr in zip(optimizer.param_groups, restored_lrs, strict=True):
+                            group["lr"] = lr
+                        active._last_lr = list(restored_lrs)
+                        scheduler._last_lr = list(restored_lrs)
+                        logger.info("[resume] restored warmup/cosine phase LR: %s -> %s", previous_lrs, restored_lrs)
     return meta
 
 

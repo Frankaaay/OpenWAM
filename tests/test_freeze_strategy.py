@@ -3,6 +3,32 @@
 import torch.nn as nn
 
 
+def test_no_grad_wrapper_uses_copied_subtree():
+    import copy
+    import torch
+    from openwam.model.architectures.base import _wrap_forward_in_no_grad
+
+    source = nn.Sequential(nn.Linear(1, 1, bias=False))
+    with torch.no_grad():
+        source[0].weight.fill_(1)
+    _wrap_forward_in_no_grad(source)
+    copied = copy.deepcopy(source)
+    with torch.no_grad():
+        copied[0].weight.fill_(3)
+
+    inputs = torch.ones(1, 1, requires_grad=True)
+    result = copied(inputs)
+    assert result.item() == 3
+    assert source(inputs).item() == 1
+    assert not result.requires_grad
+    # Direct entry into a copied descendant must still suppress gradients.
+    assert not copied[0](inputs).requires_grad
+    forward = copied.forward
+    _wrap_forward_in_no_grad(copied)
+    assert copied.forward is forward
+    assert list(copied.state_dict()) == ["0.weight"]
+
+
 class MockPipeline:
     """Minimal mock of WanVideoPipeline with named submodules."""
 
