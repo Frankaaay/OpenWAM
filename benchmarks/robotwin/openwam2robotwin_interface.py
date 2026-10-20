@@ -361,6 +361,12 @@ class ModelClient:
             prompt=prompt,
             state=state_list,
         )
+        if "right_cams" in example:
+            right_cams = example["right_cams"]
+            payload["right_images"] = {
+                name: client.encode_numpy_b64(right_cams[key])
+                for name, key in [("head_camera", "head"), ("left_wrist_camera", "left"), ("right_wrist_camera", "right")]
+            }
         response = self._client.predict(payload)
         action = np.array(response["action"], dtype=np.float32)
 
@@ -451,6 +457,12 @@ def eval(TASK_ENV, model: ModelClient, observation: dict) -> None:
         "lang": str(instruction),
         "state": _extract_proprio(model, observation) if model._send_state else None,
     }
+
+    if getattr(getattr(TASK_ENV, "cameras", None), "stereo", {}).get("enabled", False):
+        example["right_cams"] = {
+            key: obs[name + "_right"]["rgb"]
+            for key, name in [("head", "head_camera"), ("left", "left_camera"), ("right", "right_camera")]
+        }
 
     action = model.step(example)
 

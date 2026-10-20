@@ -85,12 +85,14 @@ class ObsPreprocessor:
         img_height: int,
         img_width: int,
         requires_proprio: bool = False,
+        requires_stereo: bool = False,
     ):
         self.multiview = bool(multiview)
         self.camera_layout = list(camera_layout)
         self.img_height = int(img_height)
         self.img_width = int(img_width)
         self.requires_proprio = bool(requires_proprio)
+        self.requires_stereo = bool(requires_stereo)
 
     @classmethod
     def from_cfg(cls, cfg, engine=None) -> "ObsPreprocessor":
@@ -115,6 +117,10 @@ class ObsPreprocessor:
             img_height=int(_h if _h is not None else 384),
             img_width=int(_w if _w is not None else 320),
             requires_proprio=_resolve_requires_proprio(cfg, engine),
+            requires_stereo=(
+                _cfg_select(cfg, "model.video_backbone.encoder.name") == "stereotok"
+                and _cfg_select(cfg, "model.video_backbone.encoder.input_mode", "stereo") == "stereo"
+            ),
         )
 
     def preprocess(self, obs: dict) -> dict:
@@ -204,6 +210,27 @@ class ObsPreprocessor:
                 out_h=self.img_height,
                 out_w=self.img_width,
             )
+
+        # The second eye uses exactly the same crop/layout as the first eye.
+        # Wrist camera names denote rigs, never the corresponding right eyes.
+        right_imgs = obs.get("right_images")
+        if self.requires_stereo:
+            names = ("head_camera", "left_wrist_camera", "right_wrist_camera") if self.multiview else ("head_camera",)
+            if not isinstance(right_imgs, dict) or any(right_imgs.get(k) is None or imgs.get(k) is None for k in names):
+                raise ObsValidationError("Stereo checkpoint requires synchronized left and right images for every camera rig")
+            decoded = [_as_pil(right_imgs[k], ctx=f"right_images[{k!r}]") for k in names]
+            for k, right in zip(names, decoded):
+                if _as_pil(imgs[k], ctx=f"images[{k!r}]").size != right.size:
+                    raise ObsValidationError(f"Stereo camera dimensions differ for {k}")
+            if self.multiview:
+                obs["right_image"] = assemble_multiview_layout(
+                    dict(zip(self.camera_layout, decoded)), camera_layout=self.camera_layout,
+                    out_h=self.img_height, out_w=self.img_width,
+                )
+            else:
+                obs["right_image"] = crop_and_resize(decoded[0], self.img_height, self.img_width)
+        elif right_imgs is not None:
+            raise ObsValidationError("Right-eye images supplied to a non-stereo checkpoint")
 
         # --- Prompt passthrough (server is prompt-agnostic; normalize missing to "") ---
         obs["prompt"] = obs.get("prompt", "") or ""

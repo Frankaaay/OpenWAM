@@ -387,7 +387,7 @@ def _install_robot_planner_fallbacks(robotwin_path: str) -> None:
     robot_pkg.robot = robot_mod
 
 
-def bootstrap_robotwin_module(*, install_trace_hooks: bool = True):
+def bootstrap_robotwin_module(*, install_trace_hooks: bool = True, stereo: bool = False):
     """Prepare the RoboTwin runtime and return its loaded ``eval_policy`` module.
 
     Does everything both entrypoints share: resolve ``ROBOTWIN_PATH``, set up a
@@ -409,6 +409,17 @@ def bootstrap_robotwin_module(*, install_trace_hooks: bool = True):
 
     _prewarm_cuda_for_curobo()
     _patch_warp_torch_namespace()
+    if stereo:
+        # Reuse training's calibrated cameras, retaining native tasks and plans.
+        spec = importlib.util.find_spec("fastwam")
+        if spec is None or spec.origin is None:
+            raise RuntimeError("Stereo RoboTwin evaluation requires the pinned FastWAM dependency")
+        camera_path = Path(spec.origin).resolve().parents[2] / "third_party/RoboTwin/envs/camera/camera.py"
+        importlib.import_module("envs.camera")
+        camera_module = _load_module("envs.camera._stereotok", str(camera_path))
+        base_task = importlib.import_module("envs._base_task")
+        base_task.Camera = camera_module.Camera
+        print(f"[stereo] camera source={camera_path} sha256={_file_sha256(str(camera_path))}", flush=True)
     module = _load_robotwin_eval_module(robotwin_path)
     if os.environ.get("ROBOTWIN_ENABLE_PLANNER_FALLBACK", "") == "1":
         _install_robot_planner_fallbacks(robotwin_path)
@@ -529,7 +540,7 @@ def _install_manifest(module) -> None:
     module.eval_policy = build_manifest
 
 
-def _install_eval(module) -> None:
+def _install_eval(module, *, stereo: bool = False) -> None:
     """Evaluate exact sealed manifest entries without repeating the expert scan."""
 
     manifest_hash = os.environ["ROBOTWIN_MANIFEST_HASH"]
@@ -560,6 +571,8 @@ def _install_eval(module) -> None:
         task_env.suc = 0
         task_env.test_num = 0
         args["eval_mode"] = True
+        if stereo:
+            args["stereo"] = dict(enabled=True, head_baseline_m=0.06, left_wrist_baseline_m=0.02, right_wrist_baseline_m=0.02)
         try:
             for entry in entries:
                 episode = entry["episode"]
@@ -683,6 +696,7 @@ def _configure_labtasker(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--manifest-hash")
     parser.add_argument("--instruction-type", choices=("seen", "unseen"), default="unseen")
     parser.add_argument("--render-device")
+    parser.add_argument("--stereo", action="store_true", help="Use real right-eye cameras with training baselines (6/2/2 cm)")
     args = parser.parse_args(argv)
     if args.total_episodes <= 0:
         parser.error("--total-episodes must be positive")
@@ -759,12 +773,15 @@ def main(argv: list[str] | None = None) -> int:
             )
     elif argv is not None:
         sys.argv = [sys.argv[0], *raw_args]
-    module = bootstrap_robotwin_module()
+    stereo = bool(labtasker_args is not None and labtasker_args.stereo)
+    if stereo and labtasker_args.operation != "run_eval":
+        raise ValueError("Stereo evaluation reuses sealed native camera manifests")
+    module = bootstrap_robotwin_module(stereo=stereo)
     operation = os.environ.get("ROBOTWIN_LABTASKER_OPERATION")
     if operation == "build_manifest":
         _install_manifest(module)
     elif operation == "run_eval":
-        _install_eval(module)
+        _install_eval(module, stereo=stereo)
     elif operation:
         raise ValueError(f"unknown ROBOTWIN_LABTASKER_OPERATION: {operation}")
     _install_test_num_override(module)

@@ -237,3 +237,42 @@ def test_state_accepts_nested_list_and_flattens():
     )
     assert obs["state"].shape == (20,)
     assert obs["state"].dtype == np.float32
+
+
+@pytest.mark.parametrize("multiview", [False, True])
+def test_stereo_eyes_match_training_layout_independently(multiview):
+    from openwam.dataloader.transforms.multiview import assemble_multiview_layout, crop_and_resize
+    names = ["head_camera", "left_wrist_camera", "right_wrist_camera"]
+    left = {k: Image.fromarray(np.full((48, 64, 3), 30+i*20, np.uint8)) for i, k in enumerate(names)}
+    right = {k: Image.fromarray(np.full((48, 64, 3), 150+i*20, np.uint8)) for i, k in enumerate(names)}
+    processor = ObsPreprocessor(multiview=multiview, camera_layout=DEFAULT_MULTIVIEW_CAMERA_LAYOUT,
+                                img_height=32, img_width=32, requires_stereo=True)
+    result = processor.preprocess({"images": left, "right_images": right})
+    for field, frames in [("image", left), ("right_image", right)]:
+        expected = (assemble_multiview_layout(dict(zip(DEFAULT_MULTIVIEW_CAMERA_LAYOUT, frames.values())),
+                    camera_layout=DEFAULT_MULTIVIEW_CAMERA_LAYOUT, out_h=32, out_w=32)
+                    if multiview else crop_and_resize(frames["head_camera"], 32, 32))
+        np.testing.assert_array_equal(np.asarray(result[field]), np.asarray(expected))
+    assert not np.array_equal(np.asarray(result["image"]), np.asarray(result["right_image"]))
+    from openwam.deploy.policy import WAMPolicy
+    conditions = WAMPolicy._build_conditions(None, result)
+    assert conditions["right_first_frame_image"][0] is result["right_image"]
+
+
+@pytest.mark.parametrize("fault", ["missing", "missing_wrist", "size"])
+def test_stereo_missing_or_misaligned_eye_is_rejected(fault):
+    names = ["head_camera", "left_wrist_camera", "right_wrist_camera"]
+    images = {k: Image.new("RGB", (64, 48)) for k in names}
+    obs = {"images": images, "right_images": dict(images)}
+    if fault == "missing": del obs["right_images"]
+    elif fault == "missing_wrist": del obs["right_images"]["left_wrist_camera"]
+    else: obs["right_images"]["head_camera"] = Image.new("RGB", (32, 32))
+    processor = ObsPreprocessor(multiview=True, camera_layout=DEFAULT_MULTIVIEW_CAMERA_LAYOUT,
+                                img_height=32, img_width=32, requires_stereo=True)
+    with pytest.raises(ObsValidationError, match="Stereo"):
+        processor.preprocess(obs)
+
+
+def test_nonstereo_rejects_unexpected_right_eye():
+    with pytest.raises(ObsValidationError, match="non-stereo"):
+        _single_view().preprocess({"images": {"head_camera": _jpeg_b64()}, "right_images": {}})

@@ -343,6 +343,7 @@ class JointInferenceEngine(BaseInferenceEngine):
                 "prompt": conditions.get("prompt", ""),
                 "vace_video": conditions.get("vace_video", None),
                 "first_frame_image": conditions.get("first_frame_image", None),
+                "right_first_frame_image": conditions.get("right_first_frame_image", None),
                 "num_frames": video_num_frames,
                 "action_num_frames": action_num_frames,
                 "height": conditions.get("height", getattr(inf_cfg, "height", 384)),
