@@ -435,7 +435,7 @@ def _extract_proprio(model: ModelClient, observation: dict) -> np.ndarray:
         ) from exc
 
 
-def eval(TASK_ENV, model: ModelClient, observation: dict) -> None:
+def eval(TASK_ENV, model: ModelClient, observation: dict, *, shared_plan=False, stereo=None) -> None:
     """Per-step callback invoked by RoboTwin's eval_policy.py.
 
     RoboTwin exposes three per-camera entries under ``observation["observation"]``
@@ -443,7 +443,8 @@ def eval(TASK_ENV, model: ModelClient, observation: dict) -> None:
     to the OpenWAM client API's fixed fields (head / left_wrist / right_wrist).
     ``front_camera`` is ignored — it's not part of the server contract.
     """
-    _apply_step_lim_override(TASK_ENV)
+    if not shared_plan:
+        _apply_step_lim_override(TASK_ENV)
 
     instruction = TASK_ENV.get_instruction()
     obs = observation["observation"]
@@ -458,7 +459,7 @@ def eval(TASK_ENV, model: ModelClient, observation: dict) -> None:
         "state": _extract_proprio(model, observation) if model._send_state else None,
     }
 
-    if getattr(getattr(TASK_ENV, "cameras", None), "stereo", {}).get("enabled", False):
+    if stereo if stereo is not None else getattr(getattr(TASK_ENV, "cameras", None), "stereo", {}).get("enabled", False):
         example["right_cams"] = {
             key: obs[name + "_right"]["rgb"]
             for key, name in [("head", "head_camera"), ("left", "left_camera"), ("right", "right_camera")]
@@ -476,3 +477,27 @@ def eval(TASK_ENV, model: ModelClient, observation: dict) -> None:
     context = nullcontext() if _BENCHMARK_RNG_DOMAIN is None else _BENCHMARK_RNG_DOMAIN.activate()
     with context:
         TASK_ENV.take_action(action, action_type=model._action_type)
+
+
+class SharedPlanPolicy:
+    """Use the native OpenWAM client inside the frozen FastWAM environment loop."""
+
+    def __init__(self, *, host, port, stereo):
+        if type(stereo) is not bool:
+            raise ValueError('stereo must explicitly match the checkpoint encoder')
+        self.stereo = stereo
+        self.client = get_model(dict(host=host, port=port, action_type='ee', state_dim=20))
+        set_benchmark_rng_domain(None)
+        self.inference_seconds = []
+
+    def reset(self):
+        reset_model(self.client)
+        self.inference_seconds.clear()
+
+    def should_request_observation(self):
+        return True
+
+    def step(self, env, observation):
+        started = time.perf_counter()
+        eval(env, self.client, observation, shared_plan=True, stereo=self.stereo)
+        self.inference_seconds.append(time.perf_counter() - started)

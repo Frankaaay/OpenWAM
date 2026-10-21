@@ -756,38 +756,11 @@ def _configure_labtasker(argv: list[str]) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
-    raw_args = list(sys.argv[1:] if argv is None else argv)
-    labtasker_args = None
-    if raw_args[:1] == ["labtasker"]:
-        labtasker_args = _configure_labtasker(raw_args[1:])
-        if labtasker_args.render_device is not None:
-            # Explicit renderer selection must follow the original CUDA-before-SAPIEN ordering.
-            os.chdir(_prepare_runtime_root(os.environ["ROBOTWIN_PATH"]))
-            _prewarm_cuda_for_curobo()
-            import sapien.render
-
-            renderer = sapien.render.RenderSystem(device=labtasker_args.render_device)
-            print(
-                f"[render] requested={labtasker_args.render_device} selected={renderer.device}",
-                flush=True,
-            )
-    elif argv is not None:
-        sys.argv = [sys.argv[0], *raw_args]
-    stereo = bool(labtasker_args is not None and labtasker_args.stereo)
-    if stereo and labtasker_args.operation != "run_eval":
-        raise ValueError("Stereo evaluation reuses sealed native camera manifests")
-    module = bootstrap_robotwin_module(stereo=stereo)
-    operation = os.environ.get("ROBOTWIN_LABTASKER_OPERATION")
-    if operation == "build_manifest":
-        _install_manifest(module)
-    elif operation == "run_eval":
-        _install_eval(module, stereo=stereo)
-    elif operation:
-        raise ValueError(f"unknown ROBOTWIN_LABTASKER_OPERATION: {operation}")
-    _install_test_num_override(module)
-    usr_args = module.parse_args_and_config()
-    module.main(usr_args)
-    return 0
+    raise RuntimeError(
+        'RoboTwin evaluation is locked to the shared FastWAM plan. '
+        'Use FastWAM-C2R/scripts/c2r/evaluate.py rollout --root OUTPUT '
+        'with model=openwam in manifest.json; native manifest generation is disabled.'
+    )
 
 
 if __name__ == "__main__":
