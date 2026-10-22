@@ -216,12 +216,21 @@ class ObsPreprocessor:
         right_imgs = obs.get("right_images")
         if self.requires_stereo:
             names = ("head_camera", "left_wrist_camera", "right_wrist_camera") if self.multiview else ("head_camera",)
-            if not isinstance(right_imgs, dict) or any(right_imgs.get(k) is None or imgs.get(k) is None for k in names):
+            layouts = self.camera_layout if self.multiview else [self.camera_layout[0]]
+            required = [k for k, layout in zip(names, layouts) if layout is not None]
+            if not isinstance(right_imgs, dict) or any(right_imgs.get(k) is None or imgs.get(k) is None for k in required):
                 raise ObsValidationError("Stereo checkpoint requires synchronized left and right images for every camera rig")
-            decoded = [_as_pil(right_imgs[k], ctx=f"right_images[{k!r}]") for k in names]
-            for k, right in zip(names, decoded):
+            decoded = []
+            for k, layout in zip(names, layouts):
+                if layout is None:
+                    if imgs.get(k) is not None or right_imgs.get(k) is not None:
+                        raise ObsValidationError('Images supplied for a structural empty camera slot')
+                    decoded.append(Image.new('RGB', (self.img_width, self.img_height)))
+                    continue
+                right = _as_pil(right_imgs[k], ctx=f"right_images[{k!r}]")
                 if _as_pil(imgs[k], ctx=f"images[{k!r}]").size != right.size:
                     raise ObsValidationError(f"Stereo camera dimensions differ for {k}")
+                decoded.append(right)
             if self.multiview:
                 obs["right_image"] = assemble_multiview_layout(
                     dict(zip(self.camera_layout, decoded)), camera_layout=self.camera_layout,

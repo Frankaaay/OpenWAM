@@ -276,3 +276,23 @@ def test_stereo_missing_or_misaligned_eye_is_rejected(fault):
 def test_nonstereo_rejects_unexpected_right_eye():
     with pytest.raises(ObsValidationError, match="non-stereo"):
         _single_view().preprocess({"images": {"head_camera": _jpeg_b64()}, "right_images": {}})
+
+
+def test_libero_stereo_structural_padding_and_required_wrist():
+    layout = ['agent', 'wrist', None]
+    processor = ObsPreprocessor(multiview=True, camera_layout=layout,
+                                img_height=48, img_width=32, requires_stereo=True)
+    left = {'head_camera': Image.new('RGB', (32, 32), (20, 30, 40)),
+            'left_wrist_camera': Image.new('RGB', (32, 32), (50, 60, 70)),
+            'right_wrist_camera': None}
+    right = {'head_camera': Image.new('RGB', (32, 32), (80, 90, 100)),
+             'left_wrist_camera': Image.new('RGB', (32, 32), (110, 120, 130)),
+             'right_wrist_camera': None}
+    result = processor.preprocess({'images': left, 'right_images': right})
+    for key in ['image', 'right_image']:
+        assert not np.asarray(result[key])[32:, 16:].any()
+    assert not np.array_equal(np.asarray(result['image']), np.asarray(result['right_image']))
+    with pytest.raises(ObsValidationError):
+        processor.preprocess({'images': left, 'right_images': dict(right, left_wrist_camera=None)})
+    with pytest.raises(ObsValidationError):
+        processor.preprocess({'images': left, 'right_images': dict(right, right_wrist_camera=right['head_camera'])})

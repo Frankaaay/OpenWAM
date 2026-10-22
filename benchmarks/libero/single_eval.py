@@ -97,16 +97,17 @@ def _parse_settle_action(value, action_dim: int = 7) -> np.ndarray:
 
 def _make_env(task, cfg: dict):
     from libero.libero import get_libero_path
-    from libero.libero.envs import OffScreenRenderEnv
+    from XPolicyLab.utils.render_libero_stereo import FreshStereoEvalEnv
 
     bddl_file = Path(get_libero_path("bddl_files")) / task.problem_folder / task.bddl_file
     assets_dir = Path(get_libero_path("assets"))
     if not assets_dir.is_dir():
         raise SystemExit(f"LIBERO assets are missing: {assets_dir}")
-    return OffScreenRenderEnv(
+    return FreshStereoEvalEnv(
         bddl_file_name=str(bddl_file),
         camera_heights=int(cfg.get("camera_height", 256)),
         camera_widths=int(cfg.get("camera_width", 256)),
+        stereo=_require_bool(cfg.get('stereo', False), 'stereo'),
     )
 
 
@@ -184,6 +185,7 @@ def run_eval(cfg: dict) -> int:
     if manifest is None and not reseed_each_trial:
         env.seed(seed)
     policy = OpenWAMLiberoPolicy(
+        stereo=_require_bool(cfg.get('stereo', False), 'stereo'),
         host=cfg.get("host", "127.0.0.1"),
         port=int(cfg.get("port", 8848)),
         request_timeout=int(cfg.get("request_timeout", 300)),

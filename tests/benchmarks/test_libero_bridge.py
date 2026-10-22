@@ -99,3 +99,23 @@ def test_native_eef10_bridge_clips_runtime_command_directly() -> None:
 def test_policy_rejects_wrong_representation() -> None:
     with pytest.raises(RuntimeError, match="representation mismatch"):
         OpenWAMLiberoPolicy(_client=_Client("wrong_contract"))
+
+
+def test_libero_stereo_sends_distinct_eyes_without_changing_action():
+    class Client(_Client):
+        def predict(self, payload):
+            self.payload = payload
+            return {'action': [0, 0, 0, 1, 0, 0, 0, 1, 0, 1]}
+    client = Client('eef')
+    policy = OpenWAMLiberoPolicy(_client=client, stereo=True, send_state=False, image_transform='none')
+    obs = {'agentview_image': np.full((32, 32, 3), 20, np.uint8),
+           'robot0_eye_in_hand_image': np.full((32, 32, 3), 40, np.uint8),
+           'agentview_stereo_right_image': np.full((32, 32, 3), 60, np.uint8),
+           'robot0_eye_in_hand_stereo_right_image': np.full((32, 32, 3), 80, np.uint8)}
+    action = policy.act(obs, 'test')
+    assert action.shape == (7,)
+    assert client.payload['right_images']['right_wrist_camera'] is None
+    assert client.payload['images']['head_camera'] != client.payload['right_images']['head_camera']
+    del obs['agentview_stereo_right_image']
+    with pytest.raises(ValueError, match='right-eye'):
+        policy.act(obs, 'test')

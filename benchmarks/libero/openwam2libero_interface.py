@@ -95,6 +95,7 @@ class OpenWAMLiberoPolicy:
         debug: bool = False,
         debug_dir: str = "./debug_libero",
         _client=None,
+        stereo: bool = False,
     ) -> None:
         if str(action_mode).strip().lower() != LIBERO_ACTION_MODE:
             raise ValueError(
@@ -105,6 +106,9 @@ class OpenWAMLiberoPolicy:
         if int(action_dim) != LIBERO_ACTION7_DIM:
             raise ValueError(f"native-delta LIBERO runtime action_dim must be {LIBERO_ACTION7_DIM}")
 
+        if type(stereo) is not bool:
+            raise TypeError('stereo must be boolean')
+        self._stereo = stereo
         self._client = _client or WSPolicyClient(f"ws://{host}:{port}", timeout=request_timeout)
         self._head_camera_key = head_camera_key
         self._left_wrist_camera_key = left_wrist_camera_key
@@ -155,6 +159,20 @@ class OpenWAMLiberoPolicy:
             prompt=prompt,
             state=self._state(obs),
         )
+        if self._stereo:
+            if self._right_wrist_camera_key is not None:
+                raise ValueError('LIBERO has two camera rigs; the third layout slot must stay empty')
+            right_images = {}
+            for slot, key in [('head_camera', self._head_camera_key),
+                              ('left_wrist_camera', self._left_wrist_camera_key)]:
+                if not key or not key.endswith('_image'):
+                    raise ValueError('Stereo LIBERO requires named camera image observations')
+                right_key = key[:-6] + '_stereo_right_image'
+                if right_key not in obs or obs[right_key].shape != obs[key].shape:
+                    raise ValueError('Missing or mismatched right-eye observation: ' + right_key)
+                right_images[slot] = encode_numpy_b64(resize_for_lshape_slot(self._image(obs, right_key), slot))
+            right_images['right_wrist_camera'] = None
+            payload['right_images'] = right_images
         response = self._client.predict(payload)
         model_action = np.asarray(response["action"], dtype=np.float32).reshape(-1)
         if self._action_indices is not None:
