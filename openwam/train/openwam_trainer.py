@@ -22,6 +22,12 @@ Usage:
 """
 
 import itertools
+import hashlib
+import json
+import random
+from pathlib import Path
+
+import numpy as np
 import logging
 import math
 import os
@@ -149,6 +155,11 @@ class OpenWAMTrainer:
         freeze_list = list(getattr(m, "freeze", []))
         for name in self.architecture.freeze_modules(freeze_list):
             logger.info("Frozen: %s", name)
+
+        if cfg_get(t, "paired_initialization_seed", None) is not None and self._ckpt_source_dir is None:
+            if not bool(cfg_get(m.video_backbone, "from_scratch", False)):
+                raise ValueError("Paired random initialization requires from_scratch=true")
+            self.initialize_paired_parameters(int(t.paired_initialization_seed))
 
         # Initialize all schedulers (video + action) inside architecture
         self.architecture.init_training_schedulers(1000)
@@ -296,6 +307,15 @@ class OpenWAMTrainer:
 
         assert self.accelerator is not None, "OpenWAMTrainer requires an Accelerator"
 
+        validation = cfg_get(t, "validation", None)
+        val_every = int(cfg_get(validation, "every_steps", 0)) if validation else 0
+        if validation and val_every < 1:
+            raise ValueError("Validation interval must be positive")
+        last_val_step = None
+        if validation:
+            self.validate(global_step, opt_step, wandb_run, output_path)
+            last_val_step = opt_step
+
         # Per-step manual_seed makes timestep + noise sampling in compute_loss
         # reproducible across runs and ZeRO stages: same (rank, step) -> same RNG,
         # different ranks at the same step keep in-batch timestep diversity.
@@ -365,6 +385,10 @@ class OpenWAMTrainer:
                     output_path=output_path,
                 )
 
+                if validation and self.accelerator.sync_gradients and opt_step % val_every == 0 and opt_step != last_val_step:
+                    self.validate(global_step, opt_step, wandb_run, output_path)
+                    last_val_step = opt_step
+
                 # save_steps: write the weights line (+ the resumable full state when
                 # save_full_states_for_resume=true), then prune in lockstep.
                 if save_steps and global_step // save_steps > last_checkpoint_bucket and self.accelerator.sync_gradients:
@@ -376,12 +400,118 @@ class OpenWAMTrainer:
                         manage_checkpoints(output_path, keep_last_k)
 
                 if max_steps and global_step >= max_steps:
+                    if validation and last_val_step != opt_step:
+                        self.validate(global_step, opt_step, wandb_run, output_path)
                     pbar.close()
                     self.finish_training(output_path, global_step, save_steps, keep_last_k, is_main, wandb_run)
                     return
 
+        if validation and last_val_step != opt_step:
+            self.validate(global_step, opt_step, wandb_run, output_path)
         pbar.close()
         self.finish_training(output_path, global_step, save_steps, keep_last_k, is_main, wandb_run)
+
+    def initialize_paired_parameters(self, seed):
+        """Reset trainable modules using name-bound RNG, independent of VAE construction."""
+        devices = list(range(torch.cuda.device_count()))
+        with torch.random.fork_rng(devices=devices), torch.no_grad():
+            for name, module in self.architecture.named_modules():
+                direct = dict(module.named_parameters(recurse=False))
+                if not direct or not any(p.requires_grad for p in direct.values()):
+                    continue
+                if not all(p.requires_grad for p in direct.values()):
+                    raise ValueError("Mixed frozen/trainable leaf: " + name)
+                key = int.from_bytes(hashlib.sha256(f"{seed}:{name}".encode()).digest()[:8], "little") % (2**63 - 1)
+                torch.manual_seed(key)
+                if isinstance(module, (torch.nn.Linear, torch.nn.Conv2d, torch.nn.Conv3d,
+                                       torch.nn.Embedding, torch.nn.LayerNorm)):
+                    module.reset_parameters()
+                else:
+                    for param_name, param in direct.items():
+                        if param_name == "modulation":
+                            param.normal_(0.0, param.shape[-1] ** -0.5)
+                        elif param_name == "weight" and type(module).__name__ == "RMSNorm":
+                            param.fill_(1.0)
+                        elif param_name == "emb_pos":
+                            param.zero_()
+                        else:
+                            raise ValueError(f"Unsupported paired initialization: {name}.{param_name}")
+        digest = hashlib.sha256()
+        for name, param in sorted(self.architecture.named_parameters()):
+            if param.requires_grad:
+                digest.update(json.dumps([name, list(param.shape), str(param.dtype)]).encode())
+                digest.update(param.detach().cpu().contiguous().view(torch.uint8).numpy().tobytes())
+        value = digest.hexdigest()
+        expected = Path(self.cfg.training.paired_initialization_receipt)
+        expected.parent.mkdir(parents=True, exist_ok=True)
+        import fcntl
+        with expected.with_suffix('.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if expected.exists():
+                if json.loads(expected.read_text())['trainable_sha256'] != value:
+                    raise RuntimeError("Paired non-VAE initialization differs")
+            else:
+                tmp = expected.with_suffix('.tmp')
+                tmp.write_text(json.dumps(dict(seed=seed, trainable_sha256=value)))
+                os.replace(tmp, expected)
+        logger.info("PAIRED_INIT_OK rank=%d sha256=%s", self._rank, value)
+
+    @torch.no_grad()
+    def validate(self, global_step, opt_step, wandb_run, output_path):
+        """Fixed held-out windows/noise, with training RNG and module modes restored."""
+        from openwam.dataloader.registry import build_dataset
+        cfg = self.cfg.training.validation
+        python_state, numpy_state = random.getstate(), np.random.get_state()
+        modes = [(module, module.training) for module in self.architecture.modules()]
+        devices = list(range(torch.cuda.device_count()))
+        try:
+            with torch.random.fork_rng(devices=devices):
+                random.seed(int(cfg.seed)); np.random.seed(int(cfg.seed)); torch.manual_seed(int(cfg.seed))
+                if not hasattr(self, '_validation_dataset'):
+                    self._validation_dataset = build_dataset(cfg.dataloader, split='val')
+                    train_paths = set(self.dataset._sub_datasets[0]._episode_files)
+                    dataset = self._validation_dataset._sub_datasets[0]
+                    if train_paths.intersection(dataset._episode_files):
+                        raise ValueError('Training and validation episodes overlap')
+                    groups = {}
+                    for index, (episode, start) in enumerate(dataset._window_index):
+                        groups.setdefault(episode, []).append(index)
+                    selected = []
+                    for indices in groups.values():
+                        selected.extend(indices[int(i)] for i in np.linspace(0, len(indices)-1, min(4, len(indices)), dtype=int))
+                    self._validation_indices = selected
+                indices = self._validation_indices
+                if not indices:
+                    raise ValueError('Empty validation set')
+                world, rank = self.accelerator.num_processes, self.accelerator.process_index
+                totals = torch.zeros(4, dtype=torch.float64, device=self.accelerator.device)
+                self.architecture.eval()
+                for slot in range(math.ceil(len(indices) / world)):
+                    position = slot * world + rank
+                    index = indices[position] if position < len(indices) else indices[0]
+                    sample_seed = int(cfg.seed) + index
+                    random.seed(sample_seed); np.random.seed(sample_seed); torch.manual_seed(sample_seed)
+                    losses = self.compute_loss([self._validation_dataset[index]])
+                    values = torch.stack([losses[key].detach().to(totals) for key in ('total', 'action', 'video')])
+                    if not torch.isfinite(values).all():
+                        raise RuntimeError('Non-finite validation loss')
+                    if position < len(indices):
+                        totals[:3] += values
+                        totals[3] += 1
+                totals = self.accelerator.reduce(totals, reduction='sum')
+                metrics = {key: float(totals[i] / totals[3]) for i, key in enumerate(('val/loss', 'val/action_loss', 'val/video_loss'))}
+                metrics.update({'val/windows': int(totals[3]), 'val/optimizer_step': opt_step})
+                if self.accelerator.is_main_process:
+                    if wandb_run is None:
+                        raise RuntimeError('Validation requires an online W&B run')
+                    wandb_run.log(metrics, step=global_step)
+                    with (Path(output_path) / 'validation.jsonl').open('a') as stream:
+                        stream.write(json.dumps(dict(global_step=global_step, **metrics)) + '\n')
+                    logger.info('VALIDATION %s', json.dumps(metrics))
+        finally:
+            for module, training in modes:
+                module.training = training
+            random.setstate(python_state); np.random.set_state(numpy_state)
 
     # (3) Called by train() first — AdamW over the per-module (action/video) LR param groups.
     def build_optimizer(self) -> torch.optim.Optimizer:
