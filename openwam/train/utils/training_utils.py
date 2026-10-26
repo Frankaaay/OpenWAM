@@ -95,9 +95,8 @@ def init_wandb(cfg):
         return None
     try:
         import wandb
-    except ImportError:
-        logger.warning("wandb not installed, skipping wandb logging")
-        return None
+    except ImportError as exc:
+        raise RuntimeError("W&B is configured but its package is not installed") from exc
 
     run_name = getattr(wandb_cfg, "run_name", None)
     entity = getattr(wandb_cfg, "entity", None)
@@ -108,8 +107,13 @@ def init_wandb(cfg):
         name=run_name,
         entity=entity,
         config=OmegaConf.to_container(cfg, resolve=True),
-        resume="allow",
+        resume=os.environ.get("WANDB_RESUME", "allow"),
     )
+    if os.environ.get("WANDB_MODE") == "online" and run.settings.mode != "online":
+        raise RuntimeError("Online W&B initialization did not succeed")
+    expected_run = os.environ.get("WANDB_RUN_ID")
+    if expected_run and run.id != expected_run:
+        raise RuntimeError("W&B run identity changed")
     logger.info("wandb initialized: %s/%s", project, run.name)
     return run
 
