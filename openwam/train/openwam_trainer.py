@@ -307,6 +307,12 @@ class OpenWAMTrainer:
 
         assert self.accelerator is not None, "OpenWAMTrainer requires an Accelerator"
 
+        # Persist a restartable origin before validation or the first optimizer step.
+        if save_full_states_for_resume and resume_state_dir is None:
+            save_weights(self.accelerator, self.architecture, output_path, 0)
+            save_full_state(self.accelerator, output_path, 0, 0, 0)
+            self.accelerator.wait_for_everyone()
+
         validation = cfg_get(t, "validation", None)
         val_every = int(cfg_get(validation, "every_steps", 0)) if validation else 0
         if validation and val_every < 1:
