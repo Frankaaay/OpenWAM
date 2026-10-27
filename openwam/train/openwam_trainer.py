@@ -309,7 +309,7 @@ class OpenWAMTrainer:
 
         # Persist a restartable origin before validation or the first optimizer step.
         if save_full_states_for_resume and resume_state_dir is None:
-            save_weights(self.accelerator, self.architecture, output_path, 0)
+            save_weights(self.accelerator, self.architecture, output_path, 0, final=False)
             save_full_state(self.accelerator, output_path, 0, 0, 0)
             self.accelerator.wait_for_everyone()
 
