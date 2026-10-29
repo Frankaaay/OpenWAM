@@ -82,8 +82,11 @@ class StereoTokVideoEncoder(VideoEncoder):
         geometry = metadata["geometry"]
         if any(geometry.get(k) != v for k, v in DECODER_ARCHITECTURE.items()):
             raise ValueError("StereoTok deploy architecture mismatch")
-        if metadata["binding"]["sha256"] != "61c6057b49bec9c52f96793a20247d3746978939f0551c37142bdbda6b252eae":
-            raise ValueError("StereoTok deploy must retain the selected u15853 binding")
+        if metadata["binding"]["sha256"] not in (
+            "61c6057b49bec9c52f96793a20247d3746978939f0551c37142bdbda6b252eae",
+            "722511a4622860ed5061cd871171e5ebd4ada7ea8066b71141d401878e6cf588",
+        ):
+            raise ValueError("StereoTok deploy must retain an admitted u8000 or u15853 binding")
         # Instantiate the same reused codec without reopening its training-time export.
         # Architecture.load_checkpoint supplies every persistent tensor by strict load.
         codec = StereoTokVAE.__new__(StereoTokVAE)
