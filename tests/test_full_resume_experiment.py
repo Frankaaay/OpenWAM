@@ -76,3 +76,51 @@ def main():
     if accelerator.is_main_process:
         (root/'result.json').write_text(json.dumps(result,indent=2));print(json.dumps(result))
 if __name__=='__main__':main()
+
+
+class _ResumeCursorDataset(torch.utils.data.Dataset):
+    reads = 0
+    def __len__(self):
+        return 1024
+
+    def __getitem__(self, index):
+        type(self).reads += 1
+        return index, random.random()
+
+
+def test_upstream_skip_preserves_cursor_without_replaying_augmentation():
+    """Real Accelerate sharding; cursor equivalence, not augmentation equivalence."""
+    from accelerate import skip_first_batches
+    from accelerate.data_loader import prepare_data_loader
+
+    for workers in (0, 2):
+        for world in (1, 8):
+            for rank in range(world):
+                for epoch in (0, 3):
+                    def loader():
+                        generator = torch.Generator().manual_seed(42 + epoch)
+                        raw = torch.utils.data.DataLoader(
+                            _ResumeCursorDataset(), batch_size=4, shuffle=True,
+                            generator=generator, num_workers=workers,
+                        )
+                        prepared = prepare_data_loader(
+                            raw, device=torch.device('cpu'), num_processes=world,
+                            process_index=rank, rng_types=[], put_on_device=False,
+                        )
+                        prepared.set_epoch(epoch)
+                        return prepared
+
+                    random.seed(42)
+                    full = list(loader())
+                    random.seed(42)
+                    _ResumeCursorDataset.reads = 0
+                    resumed = list(skip_first_batches(loader(), 5))
+                    assert len(resumed) == len(full) - 5
+                    if workers == 0:
+                        assert _ResumeCursorDataset.reads == sum(len(b[0]) for b in resumed)
+                    for expected, actual in zip(full[5:], resumed, strict=True):
+                        assert torch.equal(expected[0], actual[0])
+                    # Worker RNG was not saved in legacy checkpoints. Upstream
+                    # skipping must not be advertised as bitwise augmentation resume.
+                    assert any(not torch.equal(a[1], b[1])
+                               for a, b in zip(full[5:], resumed, strict=True))

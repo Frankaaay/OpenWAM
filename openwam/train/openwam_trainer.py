@@ -332,18 +332,18 @@ class OpenWAMTrainer:
                 dataloader.set_epoch(epoch)
             if hasattr(self.dataset, "set_epoch"):
                 self.dataset.set_epoch(epoch)
-            # Recreate the same worker seeds and replay consumed batches so prompt
-            # sampling and augmentation RNG match, including worker prefetch.
+            # Keep the existing epoch shuffle seed for checkpoints from this branch.
+            # Worker augmentation RNG is not restored by upstream batch skipping.
             if self._run_seed is not None:
                 for generator in (getattr(dataloader, "generator", None),
                                   getattr(dataloader, "synchronized_generator", None)):
                     if generator is not None:
                         generator.manual_seed(per_step_seed(self._run_seed, rank=self._rank, step=epoch))
-            # On the resumed epoch, replay batches already consumed before the checkpoint.
+            # Use the upstream resume path without loading discarded video batches.
             if epoch == start_epoch and skip_first > 0:
-                epoch_iter = iter(dataloader)
-                for _ in range(skip_first):
-                    next(epoch_iter)
+                from accelerate import skip_first_batches
+
+                epoch_iter = skip_first_batches(dataloader, skip_first)
             else:
                 epoch_iter = dataloader
             for batch in epoch_iter:
