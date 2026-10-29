@@ -33,7 +33,8 @@ from openwam.model.video_backbone.encoder import (
 )
 
 
-def test_stereotok_mono_mode_survives_factory_and_deploy_metadata(monkeypatch, tmp_path):
+@pytest.mark.parametrize('checkpoint_format', ['stereotok-student-v3', 'stereotok-wan-training-v1'])
+def test_stereotok_mono_mode_survives_factory_and_deploy_metadata(monkeypatch, tmp_path, checkpoint_format):
     import json
     from fastwam.models.wan22 import stereotok_vae
     from openwam.model.video_backbone.encoder.stereotok import StereoTokVideoEncoder
@@ -43,13 +44,15 @@ def test_stereotok_mono_mode_survives_factory_and_deploy_metadata(monkeypatch, t
             super().__init__()
             self.requires_stereo = input_mode == 'stereo'
             self.binding = {'input_mode': input_mode,
-                            'sha256': '61c6057b49bec9c52f96793a20247d3746978939f0551c37142bdbda6b252eae'}
+                            'sha256': 'a' * 64}
 
     monkeypatch.setattr(stereotok_vae, 'StereoTokVAE', Codec)
-    monkeypatch.setattr(torch, 'load', lambda *a, **kw: {'geometry': {}})
+    payload = {'format': checkpoint_format, 'geometry': {'test': 1}, 'config': {'geometry': {'test': 2}}}
+    monkeypatch.setattr(torch, 'load', lambda *a, **kw: payload)
     encoder = build_video_encoder({'name': 'stereotok', 'model_path': 'unused', 'input_mode': 'mono-left'})
     assert isinstance(encoder, StereoTokVideoEncoder)
     assert not encoder.requires_stereo
+    assert encoder.geometry == (payload['config']['geometry'] if checkpoint_format == 'stereotok-wan-training-v1' else payload['geometry'])
     encoder.save_deploy_assets(tmp_path, {})
     assert json.loads((tmp_path / 'stereotok.json').read_text())['binding']['input_mode'] == 'mono-left'
 
