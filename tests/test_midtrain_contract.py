@@ -6,6 +6,8 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import h5py
 import numpy as np
@@ -15,6 +17,21 @@ from openwam.dataloader.orion_midtrain import droid_states, droid_targets, scatt
 
 
 class MidtrainContractTests(unittest.TestCase):
+    def test_window_exclusion_does_not_hide_other_errors(self):
+        script = Path(__file__).parents[1] / 'scripts/prepare_orion_midtrain.py'
+        spec = importlib.util.spec_from_file_location('prepare_midtrain', script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module._stats_dataset = SimpleNamespace(ids=[17], record=lambda _: dict(source_episode_id='episode', target_ns=[123]))
+        with patch.object(module, 'droid_targets', side_effect=ValueError('DROID RGB anchor outside observed state timestamps: episode')):
+            arrays, excluded = module._droid_target_batch([0])
+        self.assertIsNone(arrays)
+        self.assertEqual(excluded[0]['window_id'], 17)
+        self.assertEqual(excluded[0]['anchor_ns'], 123)
+        with patch.object(module, 'droid_targets', side_effect=ValueError('nonfinite state')):
+            with self.assertRaisesRegex(ValueError, 'nonfinite state'):
+                module._droid_target_batch([0])
+
     def test_observed_targets_fixed_anchor_and_missing_arm(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

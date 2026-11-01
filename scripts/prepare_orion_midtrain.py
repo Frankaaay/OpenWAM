@@ -6,6 +6,7 @@ from pathlib import Path
 import sqlite3
 from concurrent.futures import ProcessPoolExecutor
 import multiprocessing
+import shutil
 
 import ijson
 import numpy as np
@@ -62,13 +63,22 @@ def index_droid(manifest, audit_dir, output):
 
 
 def _droid_target_batch(indices):
-    states, actions, masks = [], [], []
+    states, actions, masks, excluded = [], [], [], []
     for i in indices:
-        grid, relative, valid, _ = droid_targets(_stats_dataset.record(i))
+        record = _stats_dataset.record(i)
+        try:
+            grid, relative, valid, _ = droid_targets(record)
+        except ValueError as exc:
+            if not str(exc).startswith('DROID RGB anchor outside observed state timestamps:'):
+                raise
+            excluded.append(dict(window_id=int(_stats_dataset.ids[i]),
+                                 episode=record['source_episode_id'],
+                                 anchor_ns=int(record['target_ns'][0]), reason=str(exc)))
+            continue
         states.append(grid[1:, :, :9].numpy())
         actions.append(relative.reshape(-1, 2, 10)[..., :9].numpy())
         masks.append(valid.reshape(-1, 2, 10)[..., :9].numpy())
-    return np.stack(states), np.stack(actions), np.stack(masks)
+    return ((np.stack(states), np.stack(actions), np.stack(masks)) if states else None), excluded
 
 
 def droid_stats(output):
@@ -77,17 +87,47 @@ def droid_stats(output):
     state, action = RunningMoments((2, 9)), RunningMoments((2, 9))
     required = torch.zeros((2, 9), dtype=torch.bool)
     required[0] = True
-    batches = [range(i, min(i + 128, len(dataset))) for i in range(0, len(dataset), 128)]
     # Separate processes avoid h5py's per-process global lock. Parent still
     # reduces every accepted target in deterministic index order using Orion.
-    with ProcessPoolExecutor(max_workers=8, mp_context=multiprocessing.get_context('fork')) as pool:
-        for i, (absolute, relative, mask) in enumerate(pool.map(_droid_target_batch, batches), 1):
-            state.update(torch.from_numpy(absolute), torch.from_numpy(mask))
-            action.update(torch.from_numpy(relative), torch.from_numpy(mask))
-            if i % 8 == 0:
-                print('DROID_STATS', min(i * 128, len(dataset)), len(dataset), flush=True)
+    excluded_ids, excluded_counts = [], Counter()
+    with (output / 'droid-window-exclusions.jsonl').open('x') as receipts:
+        for split in ('train', 'val', 'test'):
+            _stats_dataset = dataset = DROIDOrionDataset(output / 'droid.sqlite', None, split)
+            batches = [range(i, min(i + 128, len(dataset))) for i in range(0, len(dataset), 128)]
+            with ProcessPoolExecutor(max_workers=8, mp_context=multiprocessing.get_context('fork')) as pool:
+                for i, (arrays, excluded) in enumerate(pool.map(_droid_target_batch, batches), 1):
+                    if arrays is not None and split == 'train':
+                        absolute, relative, mask = arrays
+                        state.update(torch.from_numpy(absolute), torch.from_numpy(mask))
+                        action.update(torch.from_numpy(relative), torch.from_numpy(mask))
+                    for row in excluded:
+                        row['split'] = split
+                        receipts.write(json.dumps(row) + '\n')
+                        excluded_ids.append((row['window_id'],))
+                        excluded_counts[split] += 1
+                    if i % 8 == 0:
+                        receipts.flush()
+                        print('DROID_STATS', split, min(i * 128, len(dataset)), len(dataset), 'excluded', dict(excluded_counts), flush=True)
+            if split == 'train':
+                train_windows = len(dataset) - excluded_counts[split]
+    # Preserve the original admitted index before removing explicitly receipted
+    # windows whose current observation has no measured-state reference.
+    backup = output / 'droid-before-window-filter.sqlite'
+    if backup.exists():
+        raise FileExistsError(backup)
+    shutil.copyfile(output / 'droid.sqlite', backup)
+    with sqlite3.connect(output / 'droid.sqlite') as con:
+        con.executemany('delete from windows where id=?', excluded_ids)
+        counts = dict(con.execute('select split,count(*) from windows group by split'))
+        episodes = con.execute('select count(distinct episode) from windows').fetchone()[0]
+    admission_path = output / 'droid-admission.json'
+    admission = json.loads(admission_path.read_text())
+    write_json(output / 'droid-admission-before-window-filter.json', admission)
+    admission.update(windows=counts, episodes=episodes, excluded_windows=dict(excluded_counts),
+                     window_exclusions=str(output / 'droid-window-exclusions.jsonl'))
+    admission_path.write_text(json.dumps(admission, indent=2))
     result = dict(schema_version=NGAD_CANONICAL_SCHEMA, gripper_open_value=[1., 1.], gripper_closed_value=[0., 0.],
-                  statistics=dict(method='population_zscore_parallel_welford', train_windows=len(dataset), rgb_rate_hz=10, action_rate_hz=20))
+                  statistics=dict(method='population_zscore_parallel_welford', train_windows=train_windows, rgb_rate_hz=10, action_rate_hz=20))
     for name, moments in [('state', state), ('action', action)]:
         stats = moments.result(1e-5, required)
         for field in ('mean', 'std', 'min', 'max'):
