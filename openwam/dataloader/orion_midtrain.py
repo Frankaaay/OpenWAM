@@ -57,7 +57,7 @@ def abc_orion(root, stats_path, split):
         for row in pq.read_table(path, columns=['episode_index', 'source_split']).to_pylist():
             published[int(row['episode_index'])] = row['source_split']
     dataset = ORIONPretrainDataset(
-        dataset_dirs=[dict(name='abc', path=str(root),
+        dataset_dirs=[dict(name='abc130k', path=str(root),
                            mask_and_mapping_path=str(root / 'dataset_configs/masks/mask_and_mapping_abc130k.json'))],
         normalization_stats_path=stats_path, rgb_rate_hz=10, action_steps_per_rgb_frame=2,
         frame_ranges=((0, 16),), source_phase_offsets=(0, 1, 2), validation_split=0, split='train',

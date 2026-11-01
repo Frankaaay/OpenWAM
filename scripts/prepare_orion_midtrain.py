@@ -22,7 +22,8 @@ def index_droid(manifest, audit_dir, output):
     summary = json.loads((audit_dir / 'droid-action-audit-summary.json').read_text())
     if not summary['full_action_schema_audited']:
         raise RuntimeError('DROID audit incomplete')
-    audits = {r['id']: r for r in map(json.loads, (audit_dir / 'droid-action-audit.jsonl').read_text().splitlines())}
+    audit_path = Path(summary.get('audit_path', audit_dir / 'droid-action-audit.jsonl'))
+    audits = {r['id']: r for r in map(json.loads, audit_path.read_text().splitlines())}
     recovered = {r['id']: r for r in map(json.loads, (audit_dir / 'droid-state-recovery.jsonl').read_text().splitlines())}
     unresolved = [key for key, value in audits.items() if not value['ok'] and recovered.get(key, {}).get('status') not in ('recovered', 'exclude_missing_state')]
     if unresolved:
