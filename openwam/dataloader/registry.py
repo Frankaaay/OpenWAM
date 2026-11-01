@@ -51,6 +51,10 @@ def build_dataset(config, split: str = "train") -> BaseDataset:
         Instantiated dataset.
     """
     dtype = get_cfg(config, "type")
+    if dtype in ("abc_orion", "droid_orion") and dtype not in DATASET_REGISTRY:
+        from openwam.dataloader.orion_midtrain import ABCOrionDataset, DROIDOrionDataset
+        register_dataset("abc_orion")(ABCOrionDataset)
+        register_dataset("droid_orion")(DROIDOrionDataset)
     if dtype not in DATASET_REGISTRY:
         raise ValueError(f"Unknown dataset type '{dtype}'. Available: {list(DATASET_REGISTRY.keys())}")
 

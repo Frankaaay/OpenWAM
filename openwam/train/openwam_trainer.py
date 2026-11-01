@@ -408,12 +408,16 @@ class OpenWAMTrainer:
                 if max_steps and global_step >= max_steps:
                     if validation and last_val_step != opt_step:
                         self.validate(global_step, opt_step, wandb_run, output_path)
+                    if save_steps and save_full_states_for_resume and global_step % save_steps:
+                        save_full_state(self.accelerator, output_path, global_step, opt_step, epoch)
                     pbar.close()
                     self.finish_training(output_path, global_step, save_steps, keep_last_k, is_main, wandb_run)
                     return
 
         if validation and last_val_step != opt_step:
             self.validate(global_step, opt_step, wandb_run, output_path)
+        if save_steps and save_full_states_for_resume and global_step % save_steps:
+            save_full_state(self.accelerator, output_path, global_step, opt_step, epoch)
         pbar.close()
         self.finish_training(output_path, global_step, save_steps, keep_last_k, is_main, wandb_run)
 
@@ -474,42 +478,86 @@ class OpenWAMTrainer:
             with torch.random.fork_rng(devices=devices):
                 random.seed(int(cfg.seed)); np.random.seed(int(cfg.seed)); torch.manual_seed(int(cfg.seed))
                 if not hasattr(self, '_validation_dataset'):
-                    self._validation_dataset = build_dataset(cfg.dataloader, split='val')
-                    train_paths = set(self.dataset._sub_datasets[0]._episode_files)
-                    dataset = self._validation_dataset._sub_datasets[0]
-                    if train_paths.intersection(dataset._episode_files):
-                        raise ValueError('Training and validation episodes overlap')
-                    groups = {}
-                    for index, (episode, start) in enumerate(dataset._window_index):
-                        groups.setdefault(episode, []).append(index)
+                    validation_dataset = build_dataset(cfg.dataloader, split='val')
+
+                    def leaves(dataset, source='dataset'):
+                        if hasattr(dataset, 'names') and hasattr(dataset, 'datasets'):
+                            for name, child in zip(dataset.names, dataset.datasets):
+                                if child.action_dim != dataset.action_dim:
+                                    raise ValueError('Validation sources must use the same action dimension')
+                                yield from leaves(child, name)
+                        elif hasattr(dataset, '_sub_datasets'):
+                            for child in dataset._sub_datasets:
+                                yield from leaves(child, source)
+                        else:
+                            yield source, dataset
+
+                    def episode_ids(dataset):
+                        if hasattr(dataset, '_episode_files'):
+                            return {str(Path(p).resolve()) for p in dataset._episode_files}
+                        root = str(Path(dataset._dataset_dir).resolve())
+                        return {(root, int(i)) for i in dataset._eps_df['episode_index']}
+
+                    train_ids = set()
+                    for _, dataset in leaves(self.dataset):
+                        train_ids.update(episode_ids(dataset))
+                    self._validation_leaves = list(leaves(validation_dataset))
                     selected = []
-                    for indices in groups.values():
-                        selected.extend(indices[int(i)] for i in np.linspace(0, len(indices)-1, min(4, len(indices)), dtype=int))
+                    for leaf_index, (_, dataset) in enumerate(self._validation_leaves):
+                        source_selected = []
+                        if train_ids.intersection(episode_ids(dataset)):
+                            raise ValueError('Training and validation episodes overlap')
+                        if hasattr(dataset, '_window_index'):
+                            groups = {}
+                            for index, (episode, start) in enumerate(dataset._window_index):
+                                groups.setdefault(episode, []).append(index)
+                            groups = groups.values()
+                        else:
+                            boundaries = dataset._cum_n_starts
+                            groups = (range(int(a), int(b)) for a, b in zip(boundaries[:-1], boundaries[1:]))
+                        for indices in groups:
+                            source_selected.extend((leaf_index, indices[int(i)]) for i in np.linspace(
+                                0, len(indices)-1, min(4, len(indices)), dtype=int))
+                        limit = int(getattr(cfg, 'max_windows_per_source', 0))
+                        if limit > 0 and len(source_selected) > limit:
+                            source_selected = [source_selected[int(i)] for i in np.linspace(
+                                0, len(source_selected)-1, limit, dtype=int)]
+                        selected.extend(source_selected)
                     self._validation_indices = selected
+                    self._validation_dataset = validation_dataset
                 indices = self._validation_indices
                 if not indices:
                     raise ValueError('Empty validation set')
                 world, rank = self.accelerator.num_processes, self.accelerator.process_index
-                totals = torch.zeros(4, dtype=torch.float64, device=self.accelerator.device)
+                source_names = list(dict.fromkeys(name for name, _ in self._validation_leaves))
+                totals = torch.zeros((len(source_names), 4), dtype=torch.float64, device=self.accelerator.device)
                 self.architecture.eval()
                 for slot in range(math.ceil(len(indices) / world)):
                     position = slot * world + rank
-                    index = indices[position] if position < len(indices) else indices[0]
-                    sample_seed = int(cfg.seed) + index
+                    leaf_index, index = indices[position] if position < len(indices) else indices[0]
+                    source, dataset = self._validation_leaves[leaf_index]
+                    sample_seed = int(cfg.seed) + leaf_index * 1000003 + index
                     random.seed(sample_seed); np.random.seed(sample_seed); torch.manual_seed(sample_seed)
-                    losses = self.compute_loss([self._validation_dataset[index]])
+                    losses = self.compute_loss([dataset[index]])
                     values = torch.stack([losses[key].detach().to(totals) for key in ('total', 'action', 'video')])
                     if not torch.isfinite(values).all():
                         raise RuntimeError('Non-finite validation loss')
                     if position < len(indices):
-                        totals[:3] += values
-                        totals[3] += 1
+                        source_index = source_names.index(source)
+                        totals[source_index, :3] += values
+                        totals[source_index, 3] += 1
                 totals = self.accelerator.reduce(totals, reduction='sum')
-                metrics = {key: float(totals[i] / totals[3]) for i, key in enumerate(('val/loss', 'val/action_loss', 'val/video_loss'))}
-                metrics.update({'val/windows': int(totals[3]), 'val/optimizer_step': opt_step})
+                combined = totals.sum(dim=0)
+                metrics = {key: float(combined[i] / combined[3]) for i, key in enumerate(('val/loss', 'val/action_loss', 'val/video_loss'))}
+                metrics.update({'val/windows': int(combined[3]), 'val/optimizer_step': opt_step})
+                for source, row in zip(source_names, totals):
+                    if row[3] == 0:
+                        raise ValueError(f'Empty validation source: {source}')
+                    metrics.update({f'val/{source}/{key}': float(row[i] / row[3]) for i, key in enumerate(('loss', 'action_loss', 'video_loss'))})
+                    metrics[f'val/{source}/windows'] = int(row[3])
                 if self.accelerator.is_main_process:
                     if wandb_run is None:
-                        raise RuntimeError('Validation requires an online W&B run')
+                        raise RuntimeError('Validation requires a W&B run (online or offline)')
                     wandb_run.log(metrics, step=global_step)
                     with (Path(output_path) / 'validation.jsonl').open('a') as stream:
                         stream.write(json.dumps(dict(global_step=global_step, **metrics)) + '\n')

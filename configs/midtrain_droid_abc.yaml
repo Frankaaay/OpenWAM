@@ -1,0 +1,41 @@
+defaults:
+  - train
+  - override dataloader: midtrain_droid_abc
+  - _self_
+
+model:
+  video_backbone:
+    model_path: ${oc.env:MIDTRAIN_WAN_ROOT}
+    from_scratch: false
+    encoder:
+      name: stereotok
+      model_path: ${oc.env:MIDTRAIN_STEREOTOK}
+      input_mode: stereo
+
+training:
+  num_epochs: 1
+  max_steps: null
+  batch_size: 2
+  gradient_accumulation_steps: 4
+  learning_rate: 1e-4
+  action_lr: 1e-4
+  video_lr: 3e-6
+  dataset_num_workers: 2
+  finetune_ckpt_path: null
+  resume_ckpt_path: null
+  output_path: ${oc.env:MIDTRAIN_OUTPUT}
+  save_steps: 10000
+  save_full_states_for_resume: true
+  keep_last_k_ckpts: 1000000
+  validation:
+    every_steps: 500
+    seed: 42
+    max_windows_per_source: 128
+    dataloader: ${dataloader}
+
+project:
+  output_dir: ${training.output_path}
+  wandb:
+    project: StereoTok
+    entity: yichx14-uc-irvine
+    run_name: OpenWAM DROID+ABC StereoTok Stage3-u8000 midtrain

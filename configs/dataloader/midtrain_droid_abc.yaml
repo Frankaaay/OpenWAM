@@ -1,0 +1,18 @@
+type: mixture
+weight_strategy: proportional
+seed: 42
+num_frames: 17
+video_stride: 1
+height: 384
+width: 320
+# Orion's 17 RGB frames use 34 action substeps at 20 Hz: -0.05..1.6 s.
+# Readers explicitly mask unavailable temporal targets and the absent DROID arm.
+datasets:
+  droid:
+    type: droid_orion
+    index_path: ${oc.env:MIDTRAIN_PREP}/droid.sqlite
+    stats_path: ${oc.env:MIDTRAIN_PREP}/droid-stats.json
+  abc:
+    type: abc_orion
+    dataset_dir: ${oc.env:MIDTRAIN_ABC_ROOT}
+    stats_path: ${oc.env:MIDTRAIN_PREP}/abc-stats.json
