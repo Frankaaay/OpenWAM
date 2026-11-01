@@ -473,7 +473,8 @@ class OpenWAMTrainer:
         cfg = self.cfg.training.validation
         python_state, numpy_state = random.getstate(), np.random.get_state()
         modes = [(module, module.training) for module in self.architecture.modules()]
-        devices = list(range(torch.cuda.device_count()))
+        device = torch.device(self.accelerator.device)
+        devices = [device.index if device.index is not None else torch.cuda.current_device()] if device.type == 'cuda' else []
         try:
             with torch.random.fork_rng(devices=devices):
                 random.seed(int(cfg.seed)); np.random.seed(int(cfg.seed)); torch.manual_seed(int(cfg.seed))
