@@ -604,6 +604,9 @@ class OpenWAMTrainer:
             collate_fn=list,
             pin_memory=True,
         )
+        context = getattr(t, 'dataloader_multiprocessing_context', None)
+        if kwargs['num_workers'] > 0 and context is not None:
+            kwargs['multiprocessing_context'] = context
         if not shuffle:
             logger.info(
                 "DataLoader shuffle disabled for MixtureDataset; its shuffled index map "

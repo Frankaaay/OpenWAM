@@ -4,8 +4,11 @@ from collections import Counter
 import json
 from pathlib import Path
 import sqlite3
+from concurrent.futures import ProcessPoolExecutor
+import multiprocessing
 
 import ijson
+import numpy as np
 import torch
 
 from dataloader.compute_norm_stats import RunningMoments, compute_zscore_statistics
@@ -58,19 +61,31 @@ def index_droid(manifest, audit_dir, output):
     write_json(output / 'droid-admission.json', dict(windows=counts, episodes=len(episode_ids), excluded=list(excluded.values()), original_windows=summary['windows']))
 
 
+def _droid_target_batch(indices):
+    states, actions, masks = [], [], []
+    for i in indices:
+        grid, relative, valid, _ = droid_targets(_stats_dataset.record(i))
+        states.append(grid[1:, :, :9].numpy())
+        actions.append(relative.reshape(-1, 2, 10)[..., :9].numpy())
+        masks.append(valid.reshape(-1, 2, 10)[..., :9].numpy())
+    return np.stack(states), np.stack(actions), np.stack(masks)
+
+
 def droid_stats(output):
-    dataset = DROIDOrionDataset(output / 'droid.sqlite', None, 'train')
+    global _stats_dataset
+    _stats_dataset = dataset = DROIDOrionDataset(output / 'droid.sqlite', None, 'train')
     state, action = RunningMoments((2, 9)), RunningMoments((2, 9))
     required = torch.zeros((2, 9), dtype=torch.bool)
     required[0] = True
-    for i in range(len(dataset)):
-        grid, relative, valid, _ = droid_targets(dataset.record(i))
-        mask = valid.reshape(-1, 2, 10)[..., :9]
-        # Same all-valid-target population as Orion; proprio uses this transform.
-        state.update(grid[1:, :, :9], mask)
-        action.update(relative.reshape(-1, 2, 10)[..., :9], mask)
-        if (i + 1) % 1000 == 0:
-            print('DROID_STATS', i + 1, len(dataset), flush=True)
+    batches = [range(i, min(i + 128, len(dataset))) for i in range(0, len(dataset), 128)]
+    # Separate processes avoid h5py's per-process global lock. Parent still
+    # reduces every accepted target in deterministic index order using Orion.
+    with ProcessPoolExecutor(max_workers=8, mp_context=multiprocessing.get_context('fork')) as pool:
+        for i, (absolute, relative, mask) in enumerate(pool.map(_droid_target_batch, batches), 1):
+            state.update(torch.from_numpy(absolute), torch.from_numpy(mask))
+            action.update(torch.from_numpy(relative), torch.from_numpy(mask))
+            if i % 8 == 0:
+                print('DROID_STATS', min(i * 128, len(dataset)), len(dataset), flush=True)
     result = dict(schema_version=NGAD_CANONICAL_SCHEMA, gripper_open_value=[1., 1.], gripper_closed_value=[0., 0.],
                   statistics=dict(method='population_zscore_parallel_welford', train_windows=len(dataset), rgb_rate_hz=10, action_rate_hz=20))
     for name, moments in [('state', state), ('action', action)]:
