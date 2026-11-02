@@ -27,6 +27,15 @@ from dataloader.pretrain.windows import build_timeline_layout
 
 LAYOUT = build_timeline_layout(((0, 16),), 2)
 SLOTS = torch.tensor([*range(10), *range(34, 44)])
+WINDOW_STRIDE = 6
+
+
+class SparseABCOrionDataset(ORIONPretrainDataset):
+    """Keep Orion's physical timeline while spacing episode anchors by 0.6s."""
+
+    def _locate_window(self, index):
+        episode, window = super()._locate_window(index)
+        return episode, window * WINDOW_STRIDE
 
 
 def scatter80(value, valid):
@@ -56,7 +65,7 @@ def abc_orion(root, stats_path, split):
     for path in sorted((root / 'meta/episodes/chunk-000').glob('*.parquet')):
         for row in pq.read_table(path, columns=['episode_index', 'source_split']).to_pylist():
             published[int(row['episode_index'])] = row['source_split']
-    dataset = ORIONPretrainDataset(
+    dataset = SparseABCOrionDataset(
         dataset_dirs=[dict(name='abc130k', path=str(root),
                            mask_and_mapping_path=str(root / 'dataset_configs/masks/mask_and_mapping_abc130k.json'))],
         normalization_stats_path=stats_path, rgb_rate_hz=10, action_steps_per_rgb_frame=2,
@@ -73,6 +82,10 @@ def abc_orion(root, stats_path, split):
     dataset._length = dataset._episode_window_ends[-1] if dataset._episodes else 0
     dataset.require_camera_views((0, 1))
     dataset.select_camera_reads((0, 1))
+    dataset._episode_window_ends = np.cumsum([
+        (e['rgb_target_length'] + WINDOW_STRIDE - 1) // WINDOW_STRIDE
+        for e in dataset._episodes]).tolist()
+    dataset._length = dataset._episode_window_ends[-1] if dataset._episodes else 0
     if not len(dataset):
         raise ValueError(f'No ABC stereo windows in {split}')
     return dataset
@@ -83,6 +96,8 @@ class ABCOrionDataset(BaseDataset):
 
     def __init__(self, root, stats_path, split):
         self._dataset_dir = Path(root)
+        if stats_path and json.loads(Path(stats_path).read_text())['statistics'].get('window_stride_rgb') != WINDOW_STRIDE:
+            raise ValueError('ABC normalization does not match the 0.6s window contract')
         self.dataset = abc_orion(root, stats_path, split)
         self._eps_df = pd.DataFrame({'episode_index': [e['episode_index'] for e in self.dataset._episodes]})
         self._cum_n_starts = np.array([0, *self.dataset._episode_window_ends], dtype=np.int64)
@@ -170,6 +185,8 @@ class DROIDOrionDataset(BaseDataset):
         self.index_path = str(index_path)
         self._dataset_dir = Path(index_path).parent / 'droid'
         self.stats = json.loads(Path(stats_path).read_text()) if stats_path else None
+        if self.stats and self.stats['statistics'].get('window_stride_s') != 0.6:
+            raise ValueError('DROID normalization does not match the 0.6s window contract')
         with closing(sqlite3.connect(f'file:{self.index_path}?mode=ro', uri=True)) as con:
             rows = con.execute('select id, episode from windows where split=? order by episode,id', (split,)).fetchall()
         if not rows:

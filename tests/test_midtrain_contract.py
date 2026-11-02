@@ -2,6 +2,7 @@
 import importlib.util
 from contextlib import closing
 import json
+import hashlib
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -13,10 +14,88 @@ import h5py
 import numpy as np
 import torch
 
-from openwam.dataloader.orion_midtrain import droid_states, droid_targets, scatter80
+from openwam.dataloader.orion_midtrain import droid_states, droid_targets, scatter80, SparseABCOrionDataset
 
 
 class MidtrainContractTests(unittest.TestCase):
+    def test_sparse_abc_norm_matches_selected_anchor_phases(self):
+        script = Path(__file__).parents[1] / 'scripts/prepare_orion_midtrain.py'
+        spec = importlib.util.spec_from_file_location('prepare_midtrain', script)
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        states = torch.zeros(31, 2, 10)
+        states[:, :, 3:9] = torch.tensor([1., 0., 0., 0., 1., 0.])
+        states[:, 0, 0] = torch.arange(31).square() / 1000
+        rows = {i: {'observation.state': states[i].flatten().tolist()} for i in range(31)}
+        mask = torch.zeros(20, dtype=torch.bool); mask[:10] = True
+        meta = dict(state_element_mask=mask, field_mask={}, field_mapping={},
+                    camera_mask=torch.zeros(2, dtype=torch.bool), source_fps=30,
+                    table_backend=SimpleNamespace(read_rows=lambda *args: rows))
+        dataset = SimpleNamespace(_episodes=[dict(root_index=0, length=31, action_target_length=19, rgb_target_length=10)],
+            _root_meta=[meta], camera_keys=[], _episode_window_ends=[2], source_phase_offsets=(0,1,2),
+            timeline_layout=module.abc_orion.__globals__['LAYOUT'], action_steps_per_rgb_frame=2,
+            action_rate_hz=20, rgb_rate_hz=10, _reshape_state_window=SparseABCOrionDataset._reshape_state_window,
+            _state_interpolation_indices=SparseABCOrionDataset._state_interpolation_indices)
+        result = module.compute_zscore_statistics(dataset, progress_every=0)
+        absolute, relative = [], []
+        for anchor, phase in [(0,0), (12,1)]:
+            def x(t):
+                position=t*1.5+phase
+                lo=int(np.floor(position)); hi=int(np.ceil(position))
+                return ((1-(position-lo))*lo**2+(position-lo)*hi**2)/1000
+            for target in range(anchor-1,anchor+33):
+                if 0 <= target < 19:
+                    absolute.append(x(target)); relative.append(x(target)-x(anchor))
+        self.assertEqual(result['statistics']['anchors'], 2)
+        self.assertAlmostEqual(result['state_tcp_mean'][0][0], float(np.mean(absolute)), places=6)
+        self.assertAlmostEqual(result['action_tcp_mean'][0][0], float(np.mean(relative)), places=6)
+
+    def test_sparse_abc_anchors_keep_physical_episode_length(self):
+        dataset = object.__new__(SparseABCOrionDataset)
+        dataset._episodes = [dict(rgb_target_length=20), dict(rgb_target_length=9)]
+        dataset._episode_window_ends = [4, 6]
+        dataset._length = 6
+        self.assertEqual([dataset._locate_window(i)[1] for i in range(6)], [0, 6, 12, 18, 0, 6])
+        self.assertEqual(dataset._locate_window(3)[0]['rgb_target_length'], 20)
+
+    def test_fixed_warmup_matches_optimizer_updates_at_world16(self):
+        script = Path(__file__).parents[1] / 'openwam/train/utils/training_utils.py'
+        spec = importlib.util.spec_from_file_location('training_utils', script)
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        build_cosine_scheduler = module.build_cosine_scheduler
+        parameter = torch.nn.Parameter(torch.zeros(1))
+        optimizer = torch.optim.AdamW([parameter], lr=1e-4)
+        cfg = SimpleNamespace(training=SimpleNamespace(learning_rate=1e-4, warmup_steps=500,
+                              warmup_start_factor=.1, lr_min_ratio=.01))
+        scheduler = build_cosine_scheduler(optimizer, total_opt_steps=1000, cfg=cfg, num_processes=16)
+        self.assertAlmostEqual(optimizer.param_groups[0]['lr'], 1e-5)
+        for _ in range(500 * 16):
+            optimizer.step(); scheduler.step()
+        self.assertAlmostEqual(optimizer.param_groups[0]['lr'], 1e-4)
+        for _ in range(500 * 16):
+            optimizer.step(); scheduler.step()
+        self.assertAlmostEqual(optimizer.param_groups[0]['lr'], 1e-6)
+
+    def test_droid_reindex_uses_real_06s_windows_and_reports_gaps(self):
+        script = Path(__file__).parents[1] / 'scripts/prepare_orion_midtrain.py'
+        spec = importlib.util.spec_from_file_location('prepare_midtrain', script)
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rows = [dict(target_ns=i*100000000, capture_ns=i*100000000, source_frame=i, row=i) for i in range(30)]
+            data = json.dumps(rows).encode(); (root/'sampling.json').write_bytes(data)
+            camera = dict(sampling_path='sampling.json', sampling_sha256=hashlib.sha256(data).hexdigest())
+            record = dict(table_root=str(root), camera_specs=[camera]*3, target_ns=[0],
+                          time_tolerance_ns=1, cross_camera_tolerance_ns=1,
+                          episode_id='test@0', source_episode_id='test', split='train')
+            windows, rejected = module.droid_episode_windows(record)
+            self.assertEqual([json.loads(x)['target_ns'][0] for x in windows], [0,600000000,1200000000])
+            self.assertEqual(rejected, [])
+            rows.pop(10); data=json.dumps(rows).encode(); (root/'sampling.json').write_bytes(data)
+            camera['sampling_sha256']=hashlib.sha256(data).hexdigest()
+            windows, rejected=module.droid_episode_windows(record)
+            self.assertEqual(len(windows), 1)
+            self.assertEqual([r['reason'] for r in rejected], ['missing_camera_target']*2)
+
     def test_window_exclusion_does_not_hide_other_errors(self):
         script = Path(__file__).parents[1] / 'scripts/prepare_orion_midtrain.py'
         spec = importlib.util.spec_from_file_location('prepare_midtrain', script)
@@ -74,7 +153,13 @@ class MidtrainContractTests(unittest.TestCase):
                 (root / (name + '.jsonl')).write_text(''.join(json.dumps(row) + '\n' for row in rows))
             manifest = root / 'manifest.json'
             manifest.write_text(json.dumps(dict(episodes=[dict(source='droid', source_episode_id=key, split='train') for key in ['good', 'recover', 'missing']])))
-            module.index_droid(manifest, root, root)
+            class SerialPool:
+                def __enter__(self): return self
+                def __exit__(self, *args): return False
+                def map(self, function, rows, **kwargs):
+                    return (([json.dumps(row)], []) for row in rows)
+            with patch.object(module, 'ProcessPoolExecutor', return_value=SerialPool()):
+                module.index_droid(manifest, root, root)
             with closing(sqlite3.connect(root / 'droid.sqlite')) as con:
                 rows = [json.loads(r[0]) for r in con.execute('select payload from windows order by id')]
             self.assertEqual([r['trajectory_h5'] for r in rows], ['/good.h5', '/recovered.h5'])

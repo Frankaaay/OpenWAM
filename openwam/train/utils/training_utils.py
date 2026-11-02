@@ -70,10 +70,11 @@ def build_cosine_scheduler(optimizer, *, total_opt_steps: int, cfg, num_processe
     warmup_ratio = float(getattr(t, "warmup_ratio", 0.05))
     lr_min_ratio = float(getattr(t, "lr_min_ratio", 0.01))
     n = max(int(num_processes), 1)
-    warmup_steps = int(total_opt_steps * warmup_ratio)
+    warmup_steps = int(getattr(t, 'warmup_steps', int(total_opt_steps * warmup_ratio)))
     cosine_steps = max(total_opt_steps - warmup_steps, 1)
     warmup_iters = warmup_steps * n
-    warmup_sched = LinearLR(optimizer, start_factor=1.0 / max(warmup_iters, 1), total_iters=warmup_iters)
+    start_factor = float(getattr(t, 'warmup_start_factor', 1.0 / max(warmup_iters, 1)))
+    warmup_sched = LinearLR(optimizer, start_factor=start_factor, total_iters=warmup_iters)
     cosine_sched = CosineAnnealingLR(optimizer, T_max=cosine_steps * n, eta_min=lr * lr_min_ratio)
     scheduler = SequentialLR(optimizer, schedulers=[warmup_sched, cosine_sched], milestones=[warmup_iters])
     logger.info(
