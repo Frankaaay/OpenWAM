@@ -17,3 +17,7 @@ checkpoint：`/mnt/workdir/frank/runs/robotwin-u15853-mono-20261101/openwam/chec
 CPU 实测：H800 的 0GPU DSW，隔离 pytest 依赖位于 /mnt/workdir/frank/runs/openwam-h800-eval-speed-20261103/test-deps，使用现有 system-libs-prepared.json 的 LD_LIBRARY_PATH；tests/test_policy_server_cli.py 与 tests/test_robotwin_interface_proprio.py 共 35 passed in 30.01s。没有修改共享环境。追加客户端缓存请求/reset 边界测试后再执行该定向测试。
 
 追加单测 1 passed in 3.54s，总计36项通过。首轮 `dlc1h03217rsep7v` 在加载模型前因字面 H800 名称检查失败；没有产生回合。独立单卡身份查询 `dlce5pb0rvz7ydvq` Succeeded，实际 NVIDIA L20Y，Hopper、compute capability9.0、PCI 0x26BA10DE、81559MiB、MIG Disabled，UUID GPU-b98be483-045c-758e-2ed2-70e7dea0d5e0。此卡型与该阿里云集群既有评测记录一致；H800 是任务中的集群称呼，不能据此宣称商品型号已证实为 H800。将检查改为上述实际卡型/PCI/架构/显存及单卡约束，保持同一research配额和闲时模式。原日志全部保留。
+
+`dlc17uhuyzs1i587` / pair02：旧版完整基线成功86步/205.062s、失败700步/603.497s、失败1500步/1170.330s，取图分别53.627/436.303/876.289s。候选首回合36步且首次生成的 proprio 哈希不同，故立即停止并确认 Stopped，禁止采用该候选速度结果。根因是构建候选时只恢复4a06f9a3客户端入口，遗漏其 `benchmarks/utils/action_conversion.py` 中的wxyz转换依赖（9259a32仍是xyzw）。补齐该文件，并同步4a06f9a3的实际原生位姿测试，保留新增缓存/reset测试。属于恢复原测评合同，不是修改数据语义或放宽门禁。
+
+复测允许显式引用已完成baseline，只在GPU UUID、设备字段、case列表、config哈希完全一致时运行；保留baseline来源路径且不改旧结果。若物理GPU不同则拒绝复用。原生成输入/动作差异门禁不变。

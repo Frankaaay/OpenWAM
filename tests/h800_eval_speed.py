@@ -177,7 +177,7 @@ def compare(root):
         raise RuntimeError('Candidate consistency gate failed: ' + str(failures))
 
 
-def run(root):
+def run(root, baseline=None):
     gpu = subprocess.check_output(['nvidia-smi', '--query-gpu=name,uuid,pci.device_id,compute_cap,memory.total', '--format=csv,noheader'], text=True)
     assert len(gpu.strip().splitlines()) == 1, gpu
     name, uuid, pci, capability, memory = [v.strip() for v in gpu.strip().split(',')]
@@ -185,6 +185,14 @@ def run(root):
     # Pin the independently probed identity, rather than infer SKU from its quota.
     assert (name, pci, capability) == ('NVIDIA L20Y', '0x26BA10DE', '9.0'), gpu
     assert 80000 <= int(memory.split()[0]) <= 82000, gpu
+    if baseline is not None:
+        previous = json.loads((baseline / 'contract.json').read_text())
+        assert previous['gpu'] == gpu, 'Reusing baseline requires the identical physical GPU'
+        assert previous['cases'] == [list(c) for c in CASES]
+        assert previous['config_sha256'] == hashlib.sha256((CK/'config.yaml').read_bytes()).hexdigest()
+        for task, ordinal in CASES:
+            assert (baseline/'baseline'/f'{task}-{ordinal}.json').is_file()
+        (root/'baseline').symlink_to((baseline/'baseline').resolve(), target_is_directory=True)
     for repo, sha in [(OLD, '9259a320a5945f15eab8167f1a888f5238971eb2'),
                       (CLIENT, '4a06f9a3c78a40605fb3a4f56d60dffb1251c220'),
                       (F, '734fe840b64a8f743fbf0c7447cc07c368720c97')]:
@@ -194,7 +202,8 @@ def run(root):
     assert (CK / 'checkpoint_step_30000.safetensors').stat().st_size == 28010055404
     put(root / 'contract.json', dict(gpu=gpu, job=os.environ.get('DLC_JOB_ID'), checkpoint=str(CK),
                                    candidate_sha=subprocess.check_output(['git', '-C', str(NEW), 'rev-parse', 'HEAD'], text=True).strip(),
-                                   cases=CASES, config_sha256=hashlib.sha256((CK/'config.yaml').read_bytes()).hexdigest()))
+                                   cases=CASES, baseline_source=str(baseline) if baseline else None,
+                                   config_sha256=hashlib.sha256((CK/'config.yaml').read_bytes()).hexdigest()))
     libs = json.loads((B/'runs/fastwam-h800-smoke-20261008/system-libs-prepared.json').read_text())
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', PYTHONUNBUFFERED='1', OMP_NUM_THREADS='1',
                MKL_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', TOKENIZERS_PARALLELISM='false', CUDA_VISIBLE_DEVICES='0',
@@ -204,7 +213,7 @@ def run(root):
                __EGL_VENDOR_LIBRARY_FILENAMES=str(B/'envs/system-libs/nvidia-egl-vendor.json'),
                WANDB_MODE='disabled', DIFFSYNTH_SKIP_DOWNLOAD='true')
     signal.signal(signal.SIGTERM, lambda *args: sys.exit(143))
-    for variant in ['baseline', 'candidate']:
+    for variant in (['candidate'] if baseline is not None else ['baseline', 'candidate']):
         out = root / variant
         out.mkdir(parents=True)
         repo = OLD if variant == 'baseline' else NEW
@@ -242,5 +251,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('mode', choices=['run', 'server', 'client', 'compare'])
     parser.add_argument('output', type=Path)
+    parser.add_argument('--baseline', type=Path, help='Completed baseline root; requires the same GPU UUID and contract')
     args = parser.parse_args()
-    globals()[args.mode](args.output)
+    if args.mode == 'run':
+        run(args.output, args.baseline)
+    else:
+        globals()[args.mode](args.output)

@@ -278,13 +278,14 @@ def robotwin_endpose_to_eef20d(
 
     This mirrors ``RoboTwinDataset._read_eef_actions``:
     ``[left_xyz, left_rot6d, left_grip, right_xyz, right_rot6d, right_grip]``.
-    RoboTwin endpose quaternions are xyzw.
+    RoboTwin native endpose quaternions are wxyz (transforms3d/SAPIEN).
+    Match the published-manifest training reader's explicit conversion.
     """
     left_ep = np.asarray(left_endpose, dtype=np.float32).reshape(-1)
     right_ep = np.asarray(right_endpose, dtype=np.float32).reshape(-1)
     if left_ep.shape[0] != 7 or right_ep.shape[0] != 7:
         raise ValueError(
-            f"RoboTwin endpose fields must be 7D xyz+quat_xyzw; got left={left_ep.shape}, right={right_ep.shape}"
+            f"RoboTwin endpose fields must be 7D xyz+quat_wxyz; got left={left_ep.shape}, right={right_ep.shape}"
         )
 
     left_grip = np.asarray(left_gripper, dtype=np.float32).reshape(-1)
@@ -292,8 +293,8 @@ def robotwin_endpose_to_eef20d(
     if left_grip.size < 1 or right_grip.size < 1:
         raise ValueError("RoboTwin gripper fields must contain at least one scalar value.")
 
-    left = np.concatenate([left_ep[:3], quat_xyzw_to_rot6d(left_ep[3:]), left_grip[:1]], axis=-1)
-    right = np.concatenate([right_ep[:3], quat_xyzw_to_rot6d(right_ep[3:]), right_grip[:1]], axis=-1)
+    left = np.concatenate([left_ep[:3], quat_xyzw_to_rot6d(left_ep[[4, 5, 6, 3]]), left_grip[:1]], axis=-1)
+    right = np.concatenate([right_ep[:3], quat_xyzw_to_rot6d(right_ep[[4, 5, 6, 3]]), right_grip[:1]], axis=-1)
     return np.concatenate([left, right], axis=-1).astype(np.float32)
 
 
