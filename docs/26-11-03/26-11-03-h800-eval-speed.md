@@ -96,3 +96,11 @@ H800 dlc65igi3e4ed44g failed before candidate execution: old/old first 32 action
 
 ## Stage3 stereo cached-action repair
 Removed the duplicated right-camera payload construction outside the observation branch. Cached stereo actions previously referenced undefined obs; actual observations still carry all three right cameras. Added mono/stereo cached-callback regression cases. Executed the actual eval AST function for mono/stereo x observed/cached: all four passed, including six-camera payload and unchanged action dispatch. Local pytest is unavailable; remote server environment also lacks pytest. This targeted callback validation does not establish full GPU trajectory equivalence. Restart retains the existing strict full-model gate; no bypass or tolerance change.
+
+## Random 动态灯光取图（cherry-pick 3505ac8）
+
+用户授权H800集群1张闲时GPU实测OpenWAM Random，慢时继续优化。复用本分支、既有测试入口、原mono checkpoint及冻结Random计划；不改其他正式任务。诊断环境EVAL_SPEED_PHASE=randomized选择click_bell/0（普通随机场景）、click_bell/19（seed100019自然动态灯光）、open_microwave/1（原生1500步长回合）。先baseline-only测首个旧路径回合两次，隔离冷编译；再视实测结果定向优化。新增参数仅在tests诊断入口，不进入生产路径。每个任务的seed/instruction/步数上限保持冻结值。当前只有CPU静态检查，尚无本轮GPU实测。
+
+Random baseline01 `dlcf2h823k767thu` Succeeded：click_bell/0 seed100000成功64步，旧路径重复的输入/chunk/执行动作/RNG/结果完全相同。首次含编译193.488s；预热重复79.232541s，其中setup25.239947s、取图40.910916s、action13.081507s。取图占总时长51.6%，占setup外75.8%，触发用户授权的定向优化。
+
+候选仅调整SharedPlanPolicy：首次从env读取crazy_random_light并在该回合每步继续请求观测；静态回合沿用缓存合同；reset清除灯光状态、重新要求首次观测。视频仍拒绝。没有修改Random概率/灯光/RNG/模型/环境代码。追加动态与静态取图、reset和视频边界测试；诊断逐动作记录dynamic_light并断言冻结样本的自然灯光类别。后续同预热模型实例配对，严守零差异。

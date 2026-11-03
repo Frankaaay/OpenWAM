@@ -506,19 +506,26 @@ class SharedPlanPolicy:
             raise RuntimeError("SharedPlanPolicy requires cached-action protocol version 1")
         self.client._shared_plan = True
         self.client.needs_observation = True
+        self._dynamic_light = False
         set_benchmark_rng_domain(None)
         self.inference_seconds = []
 
     def reset(self):
         reset_model(self.client)
+        self._dynamic_light = False
         self.inference_seconds.clear()
 
     def should_request_observation(self):
-        return self.client.needs_observation
+        return self._dynamic_light or self.client.needs_observation
 
     def step(self, env, observation):
-        if getattr(env, "crazy_random_light", False) or getattr(env, "eval_video_log", False):
-            raise ValueError("Observation skipping requires static lighting and disabled evaluation video")
+        if getattr(env, "eval_video_log", False):
+            raise ValueError("Observation skipping requires disabled evaluation video")
+        # get_obs advances randomized lighting/RNG even for buffered actions.
+        # Preserve that per-action observation cadence in dynamic-light episodes.
+        self._dynamic_light = bool(getattr(env, "crazy_random_light", False))
+        if self._dynamic_light and observation is None:
+            raise ValueError("Dynamic lighting requires a fresh observation for every action")
         started = time.perf_counter()
         eval(env, self.client, observation, shared_plan=True, stereo=self.stereo)
         self.inference_seconds.append(time.perf_counter() - started)
