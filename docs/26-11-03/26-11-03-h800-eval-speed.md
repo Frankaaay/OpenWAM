@@ -62,3 +62,7 @@ pair06 作业 `dlc3cufbfhv7iai9` 已由 GetJob 确认 **Succeeded**（PyTorchJob
 证据局限：仅两个任务三个诊断样本，不能替代50任务×100回合全量成绩；精确一致结论固定同一预热模型实例。独立冷启动存在已记录的BF16非逐位复现，未通过调容差掩盖。动态灯光/视频录制不在此缓存合同支持范围。实际硬件是该H800集群的单张L20Y/Hopper80GiB，不宣称商品型号H800。既有正式作业、代码和环境均未切换。
 
 达到用户要求的重大提速后停止追加优化；后续正式评估可使用上述双端候选入口及独立结果根，本轮未启动全量任务。
+
+## Random 单卡验证启动
+
+用户授权H800集群1张闲时GPU实测OpenWAM Random，慢时继续优化。复用本分支、既有测试入口、原mono checkpoint及冻结Random计划；不改其他正式任务。诊断环境EVAL_SPEED_PHASE=randomized选择click_bell/0（普通随机场景）、click_bell/19（seed100019自然动态灯光）、open_microwave/1（原生1500步长回合）。先baseline-only测首个旧路径回合两次，隔离冷编译；再视实测结果定向优化。新增参数仅在tests诊断入口，不进入生产路径。每个任务的seed/instruction/步数上限保持冻结值。当前只有CPU静态检查，尚无本轮GPU实测。

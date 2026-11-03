@@ -22,6 +22,9 @@ PORT = 29873
 # Diagnostic selection from completed historical episodes: short success, failure,
 # and native-limit long failure. Each arm uses the identical frozen plan entries.
 CASES = [('open_laptop', 14), ('open_laptop', 1), ('open_microwave', 99)]
+PHASE = os.environ.get('EVAL_SPEED_PHASE', 'clean')
+if PHASE == 'randomized':
+    CASES = [('click_bell', 0), ('click_bell', 19), ('open_microwave', 1)]
 
 
 def put(path, value):
@@ -111,7 +114,7 @@ def client(out):
     from benchmarks.robotwin.openwam2robotwin_interface import SharedPlanPolicy
     e = evaluation()
     lock = e.shared_plan_lock()
-    plans = e.load_shared_plans(dict(episodes=100, cases=[c for c in lock['cases'] if c['phase'] == 'clean']))
+    plans = e.load_shared_plans(dict(episodes=100, cases=[c for c in lock['cases'] if c['phase'] == PHASE]))
     official, device = e.setup_runtime()
     policy = SharedPlanPolicy(host='127.0.0.1', port=PORT, stereo=False)
     original_step = policy.step
@@ -128,7 +131,8 @@ def client(out):
 
     def step(env, observation):
         original_take = env._env.take_action
-        row = dict(action_index=env.take_action_cnt, observed=observation is not None)
+        row = dict(action_index=env.take_action_cnt, observed=observation is not None,
+                   dynamic_light=bool(env.crazy_random_light))
 
         def take(action, **kwargs):
             row['action'] = np.asarray(action).tolist()
@@ -151,8 +155,8 @@ def client(out):
     for task, ordinal in selected:
         trace.clear()
         wire.clear()
-        case = next(c for c in lock['cases'] if c['task'] == task and c['phase'] == 'clean')
-        ep = plans[task + '--clean']['episodes'][ordinal]
+        case = next(c for c in lock['cases'] if c['task'] == task and c['phase'] == PHASE)
+        ep = plans[task + '--' + PHASE]['episodes'][ordinal]
         results = e.rollout_case(official, device, policy, case, [ep])
         put(out / f'{task}-{ordinal}.json', dict(result=results[0], trace=trace, wire=wire))
     policy.client._client.close()
@@ -202,7 +206,8 @@ def compare(root, cases=CASES, report='comparison.json'):
         raise RuntimeError('Candidate consistency gate failed: ' + str(failures))
 
 
-def run(root, baseline=None, shared=False):
+def run(root, baseline=None, shared=False, baseline_only=False):
+    assert not baseline_only or shared
     assert not (shared and baseline is not None)
     gpu = subprocess.check_output(['nvidia-smi', '--query-gpu=name,uuid,pci.device_id,compute_cap,memory.total', '--format=csv,noheader'], text=True)
     assert len(gpu.strip().splitlines()) == 1, gpu
@@ -228,7 +233,8 @@ def run(root, baseline=None, shared=False):
     assert (CK / 'checkpoint_step_30000.safetensors').stat().st_size == 28010055404
     put(root / 'contract.json', dict(gpu=gpu, job=os.environ.get('DLC_JOB_ID'), checkpoint=str(CK),
                                    candidate_sha=subprocess.check_output(['git', '-C', str(NEW), 'rev-parse', 'HEAD'], text=True).strip(),
-                                   cases=CASES, shared_model=shared, baseline_source=str(baseline) if baseline else None,
+                                   cases=CASES, phase=PHASE, baseline_only=baseline_only,
+                                   shared_model=shared, baseline_source=str(baseline) if baseline else None,
                                    config_sha256=hashlib.sha256((CK/'config.yaml').read_bytes()).hexdigest()))
     libs = json.loads((B/'runs/fastwam-h800-smoke-20261008/system-libs-prepared.json').read_text())
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', PYTHONUNBUFFERED='1', OMP_NUM_THREADS='1',
@@ -240,7 +246,7 @@ def run(root, baseline=None, shared=False):
                WANDB_MODE='disabled', DIFFSYNTH_SKIP_DOWNLOAD='true')
     signal.signal(signal.SIGTERM, lambda *args: sys.exit(143))
     if shared:
-        return run_shared(root, env)
+        return run_shared(root, env, baseline_only)
     for variant in (['candidate'] if baseline is not None else ['baseline', 'candidate']):
         out = root / variant
         out.mkdir(parents=True)
@@ -275,7 +281,7 @@ def run(root, baseline=None, shared=False):
     compare(root)
 
 
-def run_shared(root, env):
+def run_shared(root, env, baseline_only=False):
     """Hold model instance/compiled kernels fixed; check old-old reproducibility first."""
     for variant in ['baseline', 'repeat', 'candidate', 'server']:
         (root/variant).mkdir()
@@ -297,6 +303,8 @@ def run_shared(root, env):
         phases = [('baseline', CASES[:1]), ('repeat', CASES[:1]), ('candidate', CASES[:1])]
         for case in CASES[1:]:
             phases.extend([('baseline', [case]), ('candidate', [case])])
+        if baseline_only:
+            phases = phases[:2]
         for index, (variant, cases) in enumerate(phases):
             (root/'active-variant.txt').write_text(variant)
             crepo = NEW if variant == 'candidate' else CLIENT
@@ -317,7 +325,8 @@ def run_shared(root, env):
                 completed = index // 2
                 compare(root, CASES[:completed], report=f'paired-{completed}-comparison.json')
             print('PHASE_COMPLETE', index, variant, flush=True)
-        compare(root)
+        if not baseline_only:
+            compare(root)
     finally:
         if srv is not None and srv.poll() is None:
             os.killpg(srv.pid, signal.SIGTERM)
@@ -334,8 +343,9 @@ if __name__ == '__main__':
     parser.add_argument('output', type=Path)
     parser.add_argument('--baseline', type=Path, help='Completed baseline root; requires the same GPU UUID and contract')
     parser.add_argument('--shared', action='store_true', help='Hold one warmed model instance fixed and verify old-old first')
+    parser.add_argument('--baseline-only', action='store_true', help='Measure the first old-path case twice without candidate execution')
     args = parser.parse_args()
     if args.mode == 'run':
-        run(args.output, args.baseline, args.shared)
+        run(args.output, args.baseline, args.shared, args.baseline_only)
     else:
         globals()[args.mode](args.output)
