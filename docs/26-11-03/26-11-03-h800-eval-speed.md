@@ -92,3 +92,7 @@ ETA仅临时外推：以历史剩余量/吞吐及单目样本3.7535倍为代理�
 
 ## 13:35 deployment gate diagnosis
 H800 dlc65igi3e4ed44g failed before candidate execution: old/old first 32 actions and initial observations match, then environment state and images diverge. Added an isolated full old-code warmup rollout before the unchanged strict old/old and old/new comparisons to test cold-start effects. This is a hypothesis, not a validated production fix. No threshold, model, task or formal result changes.
+
+
+## Stage3 stereo cached-action repair
+Removed the duplicated right-camera payload construction outside the observation branch. Cached stereo actions previously referenced undefined obs; actual observations still carry all three right cameras. Added mono/stereo cached-callback regression cases. Executed the actual eval AST function for mono/stereo x observed/cached: all four passed, including six-camera payload and unchanged action dispatch. Local pytest is unavailable; remote server environment also lacks pytest. This targeted callback validation does not establish full GPU trajectory equivalence. Restart retains the existing strict full-model gate; no bypass or tolerance change.

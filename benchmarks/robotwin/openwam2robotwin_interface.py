@@ -480,12 +480,6 @@ def eval(TASK_ENV, model: ModelClient, observation: dict, *, shared_plan=False, 
                 for key, name in [("head", "head_camera"), ("left", "left_camera"), ("right", "right_camera")]
             }
 
-    if stereo if stereo is not None else getattr(getattr(TASK_ENV, "cameras", None), "stereo", {}).get("enabled", False):
-        example["right_cams"] = {
-            key: obs[name + "_right"]["rgb"]
-            for key, name in [("head", "head_camera"), ("left", "left_camera"), ("right", "right_camera")]
-        }
-
     action = model.step(example)
 
     # EEF mode: convert 20D (xyz+rot6d+grip)×2 → 16D (xyz+quat+grip)×2.

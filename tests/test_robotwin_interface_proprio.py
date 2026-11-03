@@ -297,3 +297,26 @@ def test_cached_step_has_no_image_payload_and_uses_server_boundary():
     model.needs_observation = False
     model.reset()
     assert model.needs_observation
+
+
+@pytest.mark.parametrize("stereo", [False, True])
+def test_eval_cached_action_requires_no_camera_observation(stereo):
+    model = _Model("qpos")
+    model._task_description = "hold pose"
+    expected = np.arange(14, dtype=np.float32)
+
+    def step(example):
+        assert example is None
+        return expected
+
+    model.step = step
+
+    class Env:
+        def get_instruction(self):
+            return "hold pose"
+
+        def take_action(self, action, action_type):
+            assert action_type == "qpos"
+            np.testing.assert_array_equal(action, expected)
+
+    iface.eval(Env(), model, None, shared_plan=True, stereo=stereo)
