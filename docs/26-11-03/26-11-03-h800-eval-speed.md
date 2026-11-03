@@ -13,3 +13,5 @@
 checkpoint：`/mnt/workdir/frank/runs/robotwin-u15853-mono-20261101/openwam/checkpoints/2026-11-01_22-36-55/checkpoint_step_30000.safetensors`，28,010,055,404 bytes。基线服务器/客户端与 FastWAM 路径在脚本中明确绑定，candidate 必须 clean。当前没有真实 GPU 结论；排队开始 ETA 未知，首轮预计约 45–90 分钟（含模型加载/编译，需首轮实测修订）。
 
 小样本用于验证与定位，不替代正式全量分数。若动作/输入出现无法解释的差异，不启用候选。
+
+CPU 实测：H800 的 0GPU DSW，隔离 pytest 依赖位于 /mnt/workdir/frank/runs/openwam-h800-eval-speed-20261103/test-deps，使用现有 system-libs-prepared.json 的 LD_LIBRARY_PATH；tests/test_policy_server_cli.py 与 tests/test_robotwin_interface_proprio.py 共 35 passed in 30.01s。没有修改共享环境。追加客户端缓存请求/reset 边界测试后再执行该定向测试。
