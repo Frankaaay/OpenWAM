@@ -267,6 +267,7 @@ class ModelClient:
                 os.makedirs(ep_dir, exist_ok=True)
                 print(f"[OpenWAMClient] debug images → {ep_dir}")
         self._task_description = task_description
+        self.needs_observation = True
         result = self._client.reset()
         if result.get("type") != transport.RESET_ACK:
             raise RuntimeError(f"[OpenWAMClient] Server reset failed: {result}")
@@ -327,47 +328,56 @@ class ModelClient:
         Returns:
             action: np.ndarray, shape (action_dim,)
         """
-        cams = example["cams"]
-        instruction = str(example.get("lang", self._task_description))
+        if example is None:
+            if self.needs_observation:
+                raise ValueError("Fresh observation required")
+            response = self._client.predict_once({"cached_action": True})
+        else:
+            cams = example["cams"]
+            instruction = str(example.get("lang", self._task_description))
 
-        # Mirror the upstream pattern: reset if the task instruction changes.
-        if instruction and instruction != self._task_description:
-            self.reset(instruction)
+            # Mirror the upstream pattern: reset if the task instruction changes.
+            if instruction and instruction != self._task_description:
+                self.reset(instruction)
 
-        state_arr = example.get("state", None)
-        state_list: Optional[list] = None
-        if self._send_state:
-            if state_arr is None:
-                raise ValueError(
-                    "[OpenWAMClient] send_state=True requires example['state']. "
-                    "New proprio-conditioned checkpoints need this field; set "
-                    "send_state=false only for checkpoints trained without state."
-                )
-            state_np = np.asarray(state_arr, dtype=np.float32).reshape(-1)
-            if self._state_dim is not None and state_np.size != self._state_dim:
-                raise ValueError(
-                    f"[OpenWAMClient] Extracted state_dim={state_np.size}, expected {self._state_dim}. "
-                    "Check policy_config.yml: action_type/state_dim must match the checkpoint's "
-                    "dataloader.action_mode and architecture.state_dim."
-                )
-            state_list = [float(v) for v in state_np]
+            state_arr = example.get("state", None)
+            state_list: Optional[list] = None
+            if self._send_state:
+                if state_arr is None:
+                    raise ValueError(
+                        "[OpenWAMClient] send_state=True requires example['state']. "
+                        "New proprio-conditioned checkpoints need this field; set "
+                        "send_state=false only for checkpoints trained without state."
+                    )
+                state_np = np.asarray(state_arr, dtype=np.float32).reshape(-1)
+                if self._state_dim is not None and state_np.size != self._state_dim:
+                    raise ValueError(
+                        f"[OpenWAMClient] Extracted state_dim={state_np.size}, expected {self._state_dim}. "
+                        "Check policy_config.yml: action_type/state_dim must match the checkpoint's "
+                        "dataloader.action_mode and architecture.state_dim."
+                    )
+                state_list = [float(v) for v in state_np]
 
-        # Server is prompt-agnostic; RoboTwin wraps its own instruction here (see prompt_template).
-        prompt = format_prompt_for_inference(instruction)
-        payload = client.build_payload(
-            head=client.encode_numpy_b64(cams["head"]),
-            left_wrist=client.encode_numpy_b64(cams["left"]) if cams.get("left") is not None else None,
-            right_wrist=client.encode_numpy_b64(cams["right"]) if cams.get("right") is not None else None,
-            prompt=prompt,
-            state=state_list,
-        )
-        if "right_cams" in example:
-            right_cams = example["right_cams"]
-            payload["right_images"] = {
-                name: client.encode_numpy_b64(right_cams[key])
-                for name, key in [("head_camera", "head"), ("left_wrist_camera", "left"), ("right_wrist_camera", "right")]
-            }
-        response = self._client.predict(payload)
+            # Server is prompt-agnostic; RoboTwin wraps its own instruction here (see prompt_template).
+            prompt = format_prompt_for_inference(instruction)
+            payload = client.build_payload(
+                head=client.encode_numpy_b64(cams["head"]),
+                left_wrist=client.encode_numpy_b64(cams["left"]) if cams.get("left") is not None else None,
+                right_wrist=client.encode_numpy_b64(cams["right"]) if cams.get("right") is not None else None,
+                prompt=prompt,
+                state=state_list,
+            )
+            if "right_cams" in example:
+                right_cams = example["right_cams"]
+                payload["right_images"] = {
+                    name: client.encode_numpy_b64(right_cams[key])
+                    for name, key in [("head_camera", "head"), ("left_wrist_camera", "left"), ("right_wrist_camera", "right")]
+                }
+            response = self._client.predict_once(payload) if getattr(self, "_shared_plan", False) else self._client.predict(payload)
+        if getattr(self, "_shared_plan", False):
+            if type(response.get("needs_observation")) is not bool:
+                raise RuntimeError("Server omitted the cached-action observation contract")
+            self.needs_observation = response["needs_observation"]
         action = np.array(response["action"], dtype=np.float32)
 
         self._step += 1
@@ -447,17 +457,28 @@ def eval(TASK_ENV, model: ModelClient, observation: dict, *, shared_plan=False, 
         _apply_step_lim_override(TASK_ENV)
 
     instruction = TASK_ENV.get_instruction()
-    obs = observation["observation"]
+    if observation is None:
+        if instruction != model._task_description:
+            raise RuntimeError("Instruction changed while executing a cached action")
+        example = None
+    else:
+        obs = observation["observation"]
 
-    example = {
-        "cams": {
-            "head": obs["head_camera"]["rgb"],
-            "left": obs.get("left_camera", {}).get("rgb"),
-            "right": obs.get("right_camera", {}).get("rgb"),
-        },
-        "lang": str(instruction),
-        "state": _extract_proprio(model, observation) if model._send_state else None,
-    }
+        example = {
+            "cams": {
+                "head": obs["head_camera"]["rgb"],
+                "left": obs.get("left_camera", {}).get("rgb"),
+                "right": obs.get("right_camera", {}).get("rgb"),
+            },
+            "lang": str(instruction),
+            "state": _extract_proprio(model, observation) if model._send_state else None,
+        }
+
+        if stereo if stereo is not None else getattr(getattr(TASK_ENV, "cameras", None), "stereo", {}).get("enabled", False):
+            example["right_cams"] = {
+                key: obs[name + "_right"]["rgb"]
+                for key, name in [("head", "head_camera"), ("left", "left_camera"), ("right", "right_camera")]
+            }
 
     if stereo if stereo is not None else getattr(getattr(TASK_ENV, "cameras", None), "stereo", {}).get("enabled", False):
         example["right_cams"] = {
@@ -487,6 +508,10 @@ class SharedPlanPolicy:
             raise ValueError('stereo must explicitly match the checkpoint encoder')
         self.stereo = stereo
         self.client = get_model(dict(host=host, port=port, action_type='ee', state_dim=20))
+        if self.client._client.ping().get("cached_action_protocol") != 1:
+            raise RuntimeError("SharedPlanPolicy requires cached-action protocol version 1")
+        self.client._shared_plan = True
+        self.client.needs_observation = True
         set_benchmark_rng_domain(None)
         self.inference_seconds = []
 
@@ -495,9 +520,11 @@ class SharedPlanPolicy:
         self.inference_seconds.clear()
 
     def should_request_observation(self):
-        return True
+        return self.client.needs_observation
 
     def step(self, env, observation):
+        if getattr(env, "crazy_random_light", False) or getattr(env, "eval_video_log", False):
+            raise ValueError("Observation skipping requires static lighting and disabled evaluation video")
         started = time.perf_counter()
         eval(env, self.client, observation, shared_plan=True, stereo=self.stereo)
         self.inference_seconds.append(time.perf_counter() - started)

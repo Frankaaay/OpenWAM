@@ -10,6 +10,50 @@ import pytest
 from omegaconf import OmegaConf
 
 
+@pytest.mark.parametrize("horizon", [1, 3, 32])
+def test_cached_actions_preserve_order_projection_and_reset(horizon):
+    import numpy as np
+    from types import SimpleNamespace
+    from openwam.deploy.policy import WAMPolicy
+    from openwam.deploy.server import PolicyServer
+    from openwam.deploy.obs_preprocess import ObsValidationError
+
+    class Engine:
+        architecture = SimpleNamespace(binary_command_dims=(1,))
+
+        def __init__(self):
+            self.calls = []
+
+        def generate(self, conditions):
+            self.calls.append(conditions)
+            return {"actions": np.array([[i, i % 2] for i in range(32)], dtype=np.float32)}
+
+    def make_server():
+        engine = Engine()
+        server = PolicyServer(engine, OmegaConf.create({}))
+        server._policy = WAMPolicy(engine, server.cfg, SimpleNamespace(
+            enabled=False, inference_horizon=horizon, inference_delay_steps=None))
+        server._obs_preprocessor = SimpleNamespace(preprocess=lambda obs: obs)
+        return server
+
+    old, new = make_server(), make_server()
+    with pytest.raises(ObsValidationError):
+        new.predict({"cached_action": True})
+    for i in range(horizon * 2 + 1):
+        obs = {"state": [float(i)], "prompt": "test"}
+        expected = old.predict(obs)
+        actual = new.predict(obs if new._policy.needs_observation else {"cached_action": True})
+        assert actual["action"] == expected["action"]
+        assert actual["step"] == expected["step"]
+        assert actual["needs_observation"] == ((i + 1) % horizon == 0)
+    assert old.engine.calls == new.engine.calls
+    new.reset()
+    assert new._policy.needs_observation
+    with pytest.raises(ObsValidationError):
+        new.predict({"cached_action": True})
+    assert new._request_count == 0
+
+
 def test_cli_execution_overrides_write_inference_section():
     from openwam.deploy.server import _apply_execution_cli_overrides, _build_argparser
 

@@ -40,6 +40,10 @@ class SyncInferenceExecutor:
 
         self._action_buffer: deque = deque()
 
+    @property
+    def needs_observation(self) -> bool:
+        return not self._action_buffer
+
     def predict_action(self, conditions: dict) -> np.ndarray:
         """Pop the next action, regenerating after the configured horizon."""
         if len(self._action_buffer) == 0:

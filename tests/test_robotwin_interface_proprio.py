@@ -275,3 +275,25 @@ def test_step_sends_wrapped_prompt(monkeypatch):
     sent = model._client.captured["payload"]["prompt"]
     assert sent == format_prompt_for_inference("pick")
     assert sent.startswith("A video recorded from a robot's point of view")
+
+def test_cached_step_has_no_image_payload_and_uses_server_boundary():
+    model = _make_bypassed_client()
+    model._shared_plan = True
+    model.needs_observation = False
+
+    class Transport:
+        def predict_once(self, payload):
+            assert payload == {"cached_action": True}
+            return {"action": list(range(20)), "needs_observation": True}
+
+        def reset(self):
+            return {"type": iface.transport.RESET_ACK}
+
+    model._client = Transport()
+    np.testing.assert_array_equal(model.step(None), np.arange(20, dtype=np.float32))
+    assert model.needs_observation
+    with pytest.raises(ValueError, match="Fresh observation"):
+        model.step(None)
+    model.needs_observation = False
+    model.reset()
+    assert model.needs_observation

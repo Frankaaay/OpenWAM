@@ -50,6 +50,11 @@ class WAMPolicy:
                 inference_horizon=self._execution_config.inference_horizon,
             )
 
+    @property
+    def needs_observation(self) -> bool:
+        # Async inference consumes observations even while actions are buffered.
+        return self._async or self._executor.needs_observation
+
     def predict_action(self, obs: dict) -> np.ndarray:
         """Return the next action for the given (already preprocessed) observation.
 

@@ -8,6 +8,7 @@ from benchmarks.robotwin import openwam2robotwin_interface as iface
 class SharedPlanPolicyTests(unittest.TestCase):
     def test_bridge_retains_endpoint_and_eef_layout(self):
         with patch.object(iface, 'get_model') as factory:
+            factory.return_value._client.ping.return_value = {'cached_action_protocol': 1}
             model = iface.SharedPlanPolicy(host='server', port=8848, stereo=False)
         factory.assert_called_once_with(dict(host='server', port=8848, action_type='ee', state_dim=20))
         model.reset()
@@ -19,7 +20,8 @@ class SharedPlanPolicyTests(unittest.TestCase):
             iface.SharedPlanPolicy(host='server', port=8848, stereo='false')
 
     def test_bridge_uses_shared_environment_and_exact_observation(self):
-        with patch.object(iface, 'get_model'):
+        with patch.object(iface, 'get_model') as factory:
+            factory.return_value._client.ping.return_value = {'cached_action_protocol': 1}
             model = iface.SharedPlanPolicy(host='server', port=8848, stereo=True)
         env, observation = object(), {'raw': object()}
         with patch.object(iface, 'eval') as evaluate:

@@ -182,6 +182,7 @@ class PolicyServer:
         """Return checkpoint compatibility plus optional launch ownership."""
 
         result = self._ckpt_contract()
+        result["cached_action_protocol"] = 1
         if self.readiness_token is not None:
             result["readiness_token"] = self.readiness_token
         return result
@@ -204,7 +205,12 @@ class PolicyServer:
         self._init_policy()
         t0 = time.monotonic()
 
-        obs = self._obs_preprocessor.preprocess(obs)
+        if obs.get("cached_action") is True:
+            if self._policy.needs_observation:
+                raise ObsValidationError("A fresh observation is required before the next action")
+            obs = {}
+        else:
+            obs = self._obs_preprocessor.preprocess(obs)
         action = self._policy.predict_action(obs)
 
         latency_ms = (time.monotonic() - t0) * 1000
@@ -215,6 +221,7 @@ class PolicyServer:
             "action": action.tolist(),
             "step": self._request_count,
             "latency_ms": round(latency_ms, 2),
+            "needs_observation": self._policy.needs_observation,
         }
 
     def reset(self):
