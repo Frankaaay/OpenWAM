@@ -70,3 +70,21 @@ pair06 作业 `dlc3cufbfhv7iai9` 已由 GetJob 确认 **Succeeded**（PyTorchJob
 Random baseline01 `dlcf2h823k767thu` Succeeded：click_bell/0 seed100000成功64步，旧路径重复的输入/chunk/执行动作/RNG/结果完全相同。首次含编译193.488s；预热重复79.232541s，其中setup25.239947s、取图40.910916s、action13.081507s。取图占总时长51.6%，占setup外75.8%，触发用户授权的定向优化。
 
 候选仅调整SharedPlanPolicy：首次从env读取crazy_random_light并在该回合每步继续请求观测；静态回合沿用缓存合同；reset清除灯光状态、重新要求首次观测。视频仍拒绝。没有修改Random概率/灯光/RNG/模型/环境代码。追加动态与静态取图、reset和视频边界测试；诊断逐动作记录dynamic_light并断言冻结样本的自然灯光类别。后续同预热模型实例配对，严守零差异。
+
+## Random 最终验收
+
+配对作业 `dlc1yuaf4b81pa5b` 已由API确认Succeeded。测试SHA `3505ac85e246b9afe62da7776501bfdee1b53689`；之后仅追加实验文档。GPU实际NVIDIA L20Y/Hopper9.0、81559MiB、UUID GPU-5fd224d6-245c-8ffc-f409-4217f8185c0a，单卡ForceQuotaOverSold/priority4，无额外资源。输出 `/mnt/workdir/frank/runs/openwam-h800-eval-speed-20261103/random-pair01`，基线独立测速在random-baseline01。候选与旧路径固定同一预热模型实例。
+
+| Random冻结样本 | 原结果/步数 | 旧路径预热秒 | 候选秒 | 提速 | 取图旧→新 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| click_bell/0 seed100000，静态灯光 |成功/64|80.265158|45.013873|1.7831×|64→2|
+| click_bell/19 seed100019，自然动态灯光 |失败/400|345.663110|345.157964|1.0015×|400→400|
+| open_microwave/1 seed100001，静态灯光 |失败/1500|1314.834608|294.205024|4.4691×|1500→47|
+
+普通Random（未触发crazy_random_light）的两个样本合计1395.099766→339.218897秒，4.1127倍；三个样本合计1740.762876→684.376861秒，2.5436倍。动态灯光在本诊断占1/3，属于刻意覆盖边界，不代表全量Random的自然分布，不能把该总倍率当5000回合倍率。短回合旧路径计时使用repeat/click_bell-0.json，排除首次编译；原始comparison.json的2.7052含首次冷编译，不用于报告优化收益。全部计时包含环境setup但不含进程启动/模型加载。
+
+comparison.json通过：passed=true、failures=[]、exact_generation_inputs=true、exact_chunks=true、generation_counts=[62,62]。1964个执行动作最大误差0，逐步环境RNG、初始场景/图像、种子/指令、成功结果均相同；trace中的dynamic_light分别全False/全True/全False。旧路径重复与同输入预热推理均精确一致。动态灯光400步保留400次取图，不更改灯光过程或Random概率；静态长回合取图时间1006.741570→39.061084s。41项CPU定向测试通过（20.10s）。
+
+后续使用仍为同分支双端候选与原冻结evaluator/新结果根；当前实现已支持含自然动态灯光的Random（上述旧文中的“动态灯光拒绝”描述由本节覆盖），视频记录仍不支持。完整Random诊断复现：在同预算单卡DLC中设置 `EVAL_SPEED_PHASE=randomized`，执行 `tests/h800_eval_speed.py run <新的绝对输出目录> --shared`。checkpoint、推理参数、数据和模型配置均保持原设置，未修改FastWAM/RoboTwin环境代码。
+
+本轮仅两个任务三个完整Random诊断回合，不能替代全量5000成绩，也未验证其他checkpoint/双目输入的Random速度。未启动正式Random全量、未切换其他在运行作业。达到重大提速与零差异门禁，停止追加优化。
