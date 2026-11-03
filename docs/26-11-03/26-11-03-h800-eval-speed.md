@@ -15,3 +15,5 @@ checkpoint：`/mnt/workdir/frank/runs/robotwin-u15853-mono-20261101/openwam/chec
 小样本用于验证与定位，不替代正式全量分数。若动作/输入出现无法解释的差异，不启用候选。
 
 CPU 实测：H800 的 0GPU DSW，隔离 pytest 依赖位于 /mnt/workdir/frank/runs/openwam-h800-eval-speed-20261103/test-deps，使用现有 system-libs-prepared.json 的 LD_LIBRARY_PATH；tests/test_policy_server_cli.py 与 tests/test_robotwin_interface_proprio.py 共 35 passed in 30.01s。没有修改共享环境。追加客户端缓存请求/reset 边界测试后再执行该定向测试。
+
+追加单测 1 passed in 3.54s，总计36项通过。首轮 `dlc1h03217rsep7v` 在加载模型前因字面 H800 名称检查失败；没有产生回合。独立单卡身份查询 `dlce5pb0rvz7ydvq` Succeeded，实际 NVIDIA L20Y，Hopper、compute capability9.0、PCI 0x26BA10DE、81559MiB、MIG Disabled，UUID GPU-b98be483-045c-758e-2ed2-70e7dea0d5e0。此卡型与该阿里云集群既有评测记录一致；H800 是任务中的集群称呼，不能据此宣称商品型号已证实为 H800。将检查改为上述实际卡型/PCI/架构/显存及单卡约束，保持同一research配额和闲时模式。原日志全部保留。

@@ -178,8 +178,13 @@ def compare(root):
 
 
 def run(root):
-    gpu = subprocess.check_output(['nvidia-smi', '--query-gpu=name,uuid,memory.total', '--format=csv,noheader'], text=True)
-    assert len(gpu.strip().splitlines()) == 1 and 'H800' in gpu, gpu
+    gpu = subprocess.check_output(['nvidia-smi', '--query-gpu=name,uuid,pci.device_id,compute_cap,memory.total', '--format=csv,noheader'], text=True)
+    assert len(gpu.strip().splitlines()) == 1, gpu
+    name, uuid, pci, capability, memory = [v.strip() for v in gpu.strip().split(',')]
+    # This task's named "H800" PAI cluster reports an L20Y Hopper board.
+    # Pin the independently probed identity, rather than infer SKU from its quota.
+    assert (name, pci, capability) == ('NVIDIA L20Y', '0x26BA10DE', '9.0'), gpu
+    assert 80000 <= int(memory.split()[0]) <= 82000, gpu
     for repo, sha in [(OLD, '9259a320a5945f15eab8167f1a888f5238971eb2'),
                       (CLIENT, '4a06f9a3c78a40605fb3a4f56d60dffb1251c220'),
                       (F, '734fe840b64a8f743fbf0c7447cc07c368720c97')]:
