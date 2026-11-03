@@ -297,3 +297,34 @@ def test_cached_step_has_no_image_payload_and_uses_server_boundary():
     model.needs_observation = False
     model.reset()
     assert model.needs_observation
+
+
+@pytest.mark.parametrize('dynamic', [False, True])
+def test_shared_plan_preserves_dynamic_light_observation_cadence(monkeypatch, dynamic):
+    from types import SimpleNamespace
+    policy = object.__new__(iface.SharedPlanPolicy)
+    policy.client = SimpleNamespace(needs_observation=True)
+    policy.stereo = False
+    policy._dynamic_light = False
+    policy.inference_seconds = []
+    env = SimpleNamespace(crazy_random_light=dynamic, eval_video_log=False)
+
+    def predict(env, client, observation, **kwargs):
+        client.needs_observation = False  # One generated chunk still has actions.
+
+    monkeypatch.setattr(iface, 'eval', predict)
+    monkeypatch.setattr(iface, 'reset_model', lambda client: setattr(client, 'needs_observation', True))
+    assert policy.should_request_observation()
+    policy.step(env, {})
+    assert policy.should_request_observation() == dynamic
+    if dynamic:
+        with pytest.raises(ValueError, match='Dynamic lighting'):
+            policy.step(env, None)
+    else:
+        policy.step(env, None)
+    policy.reset()
+    assert policy.should_request_observation()
+    assert not policy._dynamic_light
+    env.eval_video_log = True
+    with pytest.raises(ValueError, match='evaluation video'):
+        policy.step(env, {})

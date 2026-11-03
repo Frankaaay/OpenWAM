@@ -133,6 +133,8 @@ def client(out):
         original_take = env._env.take_action
         row = dict(action_index=env.take_action_cnt, observed=observation is not None,
                    dynamic_light=bool(env.crazy_random_light))
+        if PHASE == 'randomized':
+            assert row['dynamic_light'] == ((task, ordinal) == ('click_bell', 19)), 'Frozen lighting case changed'
 
         def take(action, **kwargs):
             row['action'] = np.asarray(action).tolist()
@@ -177,6 +179,8 @@ def compare(root, cases=CASES, report='comparison.json'):
         if not exact:
             failures.append(f'{name}: executed actions')
         rng_equal = [r['rng'] for r in a['trace']] == [r['rng'] for r in b['trace']]
+        if [r['dynamic_light'] for r in a['trace']] != [r['dynamic_light'] for r in b['trace']]:
+            failures.append(f'{name}: dynamic lighting')
         if not rng_equal:
             failures.append(f'{name}: environment RNG')
         rows.append(dict(task=task, ordinal=ordinal, exact_actions=exact, rng_equal=rng_equal,
