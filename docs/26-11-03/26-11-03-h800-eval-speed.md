@@ -68,3 +68,27 @@ pair06 作业 `dlc3cufbfhv7iai9` 已由 GetJob 确认 **Succeeded**（PyTorchJob
 用户授权把优化合入 eval 主分支、适配五项 RoboTwin 测评并重排。现役分支为 frank/eighteen-preparation（原部署4a06f9a，当前分支b7efbed；两者部署代码一致）。以 squash 合入 frank/h800-eval-speed，保留当前参数化 Stage3/u15853 编码器、右眼预处理和 engine 输入。解决客户端共享计划冲突时保留缓存协议与完整双目 payload，不替换训练或dataloader。原有dirty文件不纳入提交。
 
 已有单目三回合精确验证仍为历史证据。本次扩展诊断checkpoint、stereo与样本选择环境变量，仅用于tests；计划每路新作业在自身checkpoint下先跑旧客户端/新客户端同预热服务端的完整回合对照，严格输入/chunk/动作/RNG/结果一致后才放行正式续跑。正式manifest、权重、计划与资源不变；保留逐回合结果并归档终态旧job的claims，旧源码与日志保留。当前尚未切换或提交替代作业。
+
+## 2026-11-03 11:40 五路重排完成
+
+合并代码已推送 frank/eighteen-preparation：24e724fde689e6ef9709eecfc6443579ebdd17f9。部署关键文件 obs_preprocess.py、engine.py、encoder/stereotok.py 相对原4a06f9a无差异，保留双目与Stage3/u15853支持。独立 clean clone 均为 projects/OpenWAM-eval-main-20261103（H100位于原mirror内）；现役旧clone未改动。H800 CPU隔离环境运行 policy_server_cli、robotwin_interface_proprio、shared_plan_policy、obs_preprocess 共71 passed/19.38s。静态AST、bash-n、DLC dry-run和四份sbatch test-only通过，五路真实GPU对照尚待新作业调度。
+
+用户授权停止/适配/重排五项，资源、checkpoint、manifest/冻结计划、结果根和优先级保留。旧H10044142/38914/39118/39119均经sacct确认CANCELLED；旧H800dlc1v7w0zvd5tfcp经GetJob确认Stopped后才归档其claims。复用既有retire_terminal_claims，仅重命名已核实终态owner的active，不删除任何结果；归档数H1000/8/16/0，H8008。迁移前保存每个结果文件SHA/episode ordinal/旧job，以及旧contract/binding，保留版本边界。
+
+|任务|旧Job|新Job|保留回合|GPU|
+|---|---|---|---:|---:|
+|Stage3 mono|44142|48029|3332/5000|16 H100|
+|Stage3 stereo|38914|48030|1269/5000|8 H100|
+|Wan shared Clean|39118|48032|1819/5000|16 H100|
+|u15853 stereo shared Clean|39119|48033|0/5000|16 H100|
+|u15853 mono Clean|dlc1v7w0zvd5tfcp|dlc65igi3e4ed44g|1413/5000|固定8 H800|
+
+首次健康检查11:40：四H100 Pending Priority，调度器暂定11/5 02:15:33开跑，可能随释放资源前移；H800 EnvPreparing。每路node0在独立 speed-gates/<job> 目录用其checkpoint、原生配置和open_laptop/14完成旧路径重复及新路径对照；comparison精确输入/chunk/动作/RNG/结果全部通过后写GATE_PASSED，其他节点等待，失败写GATE_FAILED并终止，不进入正式结果。gate不代表全量5000分数等价。新作业尚无GPU对照通过或新正式回合证据。
+
+续排包装/回执/迁移前快照：H100 /gpfs/jiuquyun/projects/Frank/robotwin-h100-migration-20261101/eval-main-resume-20261103；H800 /mnt/workdir/frank/runs/eval-main-resume-20261103；本机 C:/Users/Frank/AppData/Local/AliyunCLI/h800-requests/eval-main-resume-20261103。诊断源码仍在tests，生产双端同24e724f。原有dataloader/test_libero和文档dirty不纳入本次提交。一次本机编排NameError发生在H800提交前，确认无receipt后仅补提交一次；非远端作业故障。
+
+ETA仅临时外推：以历史剩余量/吞吐及单目样本3.7535倍为代理，主体分别约1.5h、7.6h、2.8h、5.1h、6.0h，另有启动/对照门禁时间。该倍数尚未在五路完整作业实测，不能当作已确认新速度；排队时间不计入运行估算。未修改FastWAM、Dojo、LingBot或DROID训练任务。
+
+
+## 13:35 deployment gate diagnosis
+H800 dlc65igi3e4ed44g failed before candidate execution: old/old first 32 actions and initial observations match, then environment state and images diverge. Added an isolated full old-code warmup rollout before the unchanged strict old/old and old/new comparisons to test cold-start effects. This is a hypothesis, not a validated production fix. No threshold, model, task or formal result changes.

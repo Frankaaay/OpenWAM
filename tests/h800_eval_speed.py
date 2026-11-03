@@ -92,7 +92,7 @@ def server(out):
             line = json.dumps(dict(inputs=inputs, actions=actions.tolist(), seconds=elapsed)) + '\n'
             if shared_root:
                 active = (Path(shared_root)/'active-variant.txt').read_text().strip()
-                assert active in ('baseline', 'repeat', 'candidate')
+                assert active in ('warmup', 'baseline', 'repeat', 'candidate')
                 with (Path(shared_root)/active/'generations.jsonl').open('a') as f:
                     f.write(line)
             else:
@@ -278,7 +278,7 @@ def run(root, baseline=None, shared=False):
 
 def run_shared(root, env):
     """Hold model instance/compiled kernels fixed; check old-old reproducibility first."""
-    for variant in ['baseline', 'repeat', 'candidate', 'server']:
+    for variant in ['warmup', 'baseline', 'repeat', 'candidate', 'server']:
         (root/variant).mkdir()
     senv = dict(env, PYTHONPATH=':'.join(map(str, [NEW, NEW/'third_party', F/'src'])),
                 TORCHINDUCTOR_COMPILE_THREADS='1', EVAL_SPEED_SHARED_ROOT=str(root))
@@ -295,7 +295,9 @@ def run_shared(root, env):
                 raise TimeoutError('shared server startup')
             time.sleep(3)
         print('SHARED_SERVER_READY', flush=True)
-        phases = [('baseline', CASES[:1]), ('repeat', CASES[:1]), ('candidate', CASES[:1])]
+        # Exercise the full rollout once before the two strict old-code arms.
+        # Its trace is retained separately and is never used as scoring evidence.
+        phases = [('warmup', CASES[:1]), ('baseline', CASES[:1]), ('repeat', CASES[:1]), ('candidate', CASES[:1])]
         for case in CASES[1:]:
             phases.extend([('baseline', [case]), ('candidate', [case])])
         for index, (variant, cases) in enumerate(phases):
@@ -306,16 +308,16 @@ def run_shared(root, env):
             with (root/variant/f'client-{index}.log').open('x') as log:
                 subprocess.run([str(PY), __file__, 'client', str(root/variant)], cwd=F, env=cenv,
                                stdout=log, stderr=subprocess.STDOUT, check=True)
-            if index == 1:
+            if index == 2:
                 check = root/'repeat-check'
                 check.mkdir()
                 (check/'baseline').symlink_to(root/'baseline', target_is_directory=True)
                 (check/'candidate').symlink_to(root/'repeat', target_is_directory=True)
                 compare(check, CASES[:1])
-            elif index == 2:
+            elif index == 3:
                 compare(root, CASES[:1], report='short-comparison.json')
             elif variant == 'candidate':
-                completed = index // 2
+                completed = (index - 1) // 2
                 compare(root, CASES[:completed], report=f'paired-{completed}-comparison.json')
             print('PHASE_COMPLETE', index, variant, flush=True)
         compare(root)
