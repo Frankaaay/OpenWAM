@@ -314,7 +314,7 @@ def run_shared(root, env):
             elif index == 2:
                 compare(root, CASES[:1], report='short-comparison.json')
             elif variant == 'candidate':
-                completed = (index // 2) + 1
+                completed = index // 2
                 compare(root, CASES[:completed], report=f'paired-{completed}-comparison.json')
             print('PHASE_COMPLETE', index, variant, flush=True)
         compare(root)
