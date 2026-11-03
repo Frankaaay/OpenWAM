@@ -59,19 +59,43 @@ def server(out):
     def build(*args, **kwargs):
         srv = original(*args, **kwargs)
         generate = srv.engine.generate
-        stream = (out / 'generations.jsonl').open('x', buffering=1)
+        shared_root = os.environ.get('EVAL_SPEED_SHARED_ROOT')
+        stream = None if shared_root else (out / 'generations.jsonl').open('x', buffering=1)
+        warmed = False
 
         def traced(conditions):
+            nonlocal warmed
+            import numpy as np
             inputs = digest(conditions)
             torch.cuda.synchronize()
             start = time.perf_counter()
+            if shared_root and not warmed:
+                warm = [generate(conditions)['actions'] for _ in range(2)]
+                warm = [a.detach().cpu().numpy() if hasattr(a, 'detach') else np.asarray(a) for a in warm]
             result = generate(conditions)
             torch.cuda.synchronize()
             elapsed = time.perf_counter() - start
             actions = result['actions']
             if hasattr(actions, 'detach'):
                 actions = actions.detach().cpu().numpy()
-            stream.write(json.dumps(dict(inputs=inputs, actions=actions.tolist(), seconds=elapsed)) + '\n')
+            if shared_root and not warmed:
+                put(Path(shared_root)/'warmup.json', dict(
+                    first_second_equal=np.array_equal(warm[0], warm[1]),
+                    second_third_equal=np.array_equal(warm[1], actions),
+                    first_second_max_error=float(np.max(np.abs(warm[0]-warm[1]))),
+                    second_third_max_error=float(np.max(np.abs(warm[1]-actions))),
+                    inputs=inputs))
+                if not np.array_equal(warm[1], actions):
+                    raise RuntimeError('Repeated identical-input model inference is not stable after warmup')
+                warmed = True
+            line = json.dumps(dict(inputs=inputs, actions=actions.tolist(), seconds=elapsed)) + '\n'
+            if shared_root:
+                active = (Path(shared_root)/'active-variant.txt').read_text().strip()
+                assert active in ('baseline', 'repeat', 'candidate')
+                with (Path(shared_root)/active/'generations.jsonl').open('a') as f:
+                    f.write(line)
+            else:
+                stream.write(line)
             return result
 
         srv.engine.generate = traced
@@ -123,7 +147,8 @@ def client(out):
 
     policy.step = step
     policy.client._client._roundtrip = roundtrip
-    for task, ordinal in CASES:
+    selected = json.loads(os.environ.get('EVAL_SPEED_CASES', json.dumps(CASES)))
+    for task, ordinal in selected:
         trace.clear()
         wire.clear()
         case = next(c for c in lock['cases'] if c['task'] == task and c['phase'] == 'clean')
@@ -133,11 +158,11 @@ def client(out):
     policy.client._client.close()
 
 
-def compare(root):
+def compare(root, cases=CASES, report='comparison.json'):
     import numpy as np
     rows = []
     failures = []
-    for task, ordinal in CASES:
+    for task, ordinal in cases:
         name = f'{task}-{ordinal}.json'
         a, b = [json.loads((root / variant / name).read_text()) for variant in ('baseline', 'candidate')]
         for key in ['seed', 'instruction', 'success', 'actions', 'initial_scene_sha256', 'initial_observation_sha256']:
@@ -171,13 +196,14 @@ def compare(root):
                   generation_counts=[len(v) for v in generations],
                   inference_seconds=[sum(g['seconds'] for g in v) for v in generations],
                   aggregate_speedup=sum(r['baseline']['seconds'] for r in rows)/sum(r['candidate']['seconds'] for r in rows))
-    put(root / 'comparison.json', result)
+    put(root / report, result)
     print(json.dumps(result, indent=2), flush=True)
     if failures:
         raise RuntimeError('Candidate consistency gate failed: ' + str(failures))
 
 
-def run(root, baseline=None):
+def run(root, baseline=None, shared=False):
+    assert not (shared and baseline is not None)
     gpu = subprocess.check_output(['nvidia-smi', '--query-gpu=name,uuid,pci.device_id,compute_cap,memory.total', '--format=csv,noheader'], text=True)
     assert len(gpu.strip().splitlines()) == 1, gpu
     name, uuid, pci, capability, memory = [v.strip() for v in gpu.strip().split(',')]
@@ -202,7 +228,7 @@ def run(root, baseline=None):
     assert (CK / 'checkpoint_step_30000.safetensors').stat().st_size == 28010055404
     put(root / 'contract.json', dict(gpu=gpu, job=os.environ.get('DLC_JOB_ID'), checkpoint=str(CK),
                                    candidate_sha=subprocess.check_output(['git', '-C', str(NEW), 'rev-parse', 'HEAD'], text=True).strip(),
-                                   cases=CASES, baseline_source=str(baseline) if baseline else None,
+                                   cases=CASES, shared_model=shared, baseline_source=str(baseline) if baseline else None,
                                    config_sha256=hashlib.sha256((CK/'config.yaml').read_bytes()).hexdigest()))
     libs = json.loads((B/'runs/fastwam-h800-smoke-20261008/system-libs-prepared.json').read_text())
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', PYTHONUNBUFFERED='1', OMP_NUM_THREADS='1',
@@ -213,6 +239,8 @@ def run(root, baseline=None):
                __EGL_VENDOR_LIBRARY_FILENAMES=str(B/'envs/system-libs/nvidia-egl-vendor.json'),
                WANDB_MODE='disabled', DIFFSYNTH_SKIP_DOWNLOAD='true')
     signal.signal(signal.SIGTERM, lambda *args: sys.exit(143))
+    if shared:
+        return run_shared(root, env)
     for variant in (['candidate'] if baseline is not None else ['baseline', 'candidate']):
         out = root / variant
         out.mkdir(parents=True)
@@ -247,13 +275,63 @@ def run(root, baseline=None):
     compare(root)
 
 
+def run_shared(root, env):
+    """Hold model instance/compiled kernels fixed; check old-old reproducibility first."""
+    for variant in ['baseline', 'repeat', 'candidate', 'server']:
+        (root/variant).mkdir()
+    senv = dict(env, PYTHONPATH=':'.join(map(str, [NEW, NEW/'third_party', F/'src'])),
+                TORCHINDUCTOR_COMPILE_THREADS='1', EVAL_SPEED_SHARED_ROOT=str(root))
+    srv = None
+    try:
+        with (root/'server/server.log').open('x') as log:
+            srv = subprocess.Popen([str(SPY), __file__, 'server', str(root/'server')], cwd=NEW, env=senv,
+                                   stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        deadline = time.monotonic()+1800
+        while 'WebSocket server started' not in (root/'server/server.log').read_text(errors='replace'):
+            if srv.poll() is not None:
+                raise RuntimeError((root/'server/server.log').read_text(errors='replace')[-6000:])
+            if time.monotonic()>deadline:
+                raise TimeoutError('shared server startup')
+            time.sleep(3)
+        print('SHARED_SERVER_READY', flush=True)
+        phases = [('baseline', CASES[:1]), ('repeat', CASES[:1]), ('candidate', CASES[:1]),
+                  ('baseline', CASES[1:]), ('candidate', CASES[1:])]
+        for index, (variant, cases) in enumerate(phases):
+            (root/'active-variant.txt').write_text(variant)
+            crepo = NEW if variant == 'candidate' else CLIENT
+            cenv = dict(env, PYTHONPATH=':'.join(map(str, [B/'runs/shared-robotwin-acceptance-20261021/client-deps', F/'src', crepo, B/'projects'])),
+                        EVAL_SPEED_CASES=json.dumps(cases))
+            with (root/variant/f'client-{index}.log').open('x') as log:
+                subprocess.run([str(PY), __file__, 'client', str(root/variant)], cwd=F, env=cenv,
+                               stdout=log, stderr=subprocess.STDOUT, check=True)
+            if index == 1:
+                check = root/'repeat-check'
+                check.mkdir()
+                (check/'baseline').symlink_to(root/'baseline', target_is_directory=True)
+                (check/'candidate').symlink_to(root/'repeat', target_is_directory=True)
+                compare(check, CASES[:1])
+            elif index == 2:
+                compare(root, CASES[:1], report='short-comparison.json')
+            print('PHASE_COMPLETE', index, variant, flush=True)
+        compare(root)
+    finally:
+        if srv is not None and srv.poll() is None:
+            os.killpg(srv.pid, signal.SIGTERM)
+            try:
+                srv.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                os.killpg(srv.pid, signal.SIGKILL)
+                srv.wait()
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('mode', choices=['run', 'server', 'client', 'compare'])
     parser.add_argument('output', type=Path)
     parser.add_argument('--baseline', type=Path, help='Completed baseline root; requires the same GPU UUID and contract')
+    parser.add_argument('--shared', action='store_true', help='Hold one warmed model instance fixed and verify old-old first')
     args = parser.parse_args()
     if args.mode == 'run':
-        run(args.output, args.baseline)
+        run(args.output, args.baseline, args.shared)
     else:
         globals()[args.mode](args.output)
