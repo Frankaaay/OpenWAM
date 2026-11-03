@@ -294,8 +294,9 @@ def run_shared(root, env):
                 raise TimeoutError('shared server startup')
             time.sleep(3)
         print('SHARED_SERVER_READY', flush=True)
-        phases = [('baseline', CASES[:1]), ('repeat', CASES[:1]), ('candidate', CASES[:1]),
-                  ('baseline', CASES[1:]), ('candidate', CASES[1:])]
+        phases = [('baseline', CASES[:1]), ('repeat', CASES[:1]), ('candidate', CASES[:1])]
+        for case in CASES[1:]:
+            phases.extend([('baseline', [case]), ('candidate', [case])])
         for index, (variant, cases) in enumerate(phases):
             (root/'active-variant.txt').write_text(variant)
             crepo = NEW if variant == 'candidate' else CLIENT
@@ -312,6 +313,9 @@ def run_shared(root, env):
                 compare(check, CASES[:1])
             elif index == 2:
                 compare(root, CASES[:1], report='short-comparison.json')
+            elif variant == 'candidate':
+                completed = (index // 2) + 1
+                compare(root, CASES[:completed], report=f'paired-{completed}-comparison.json')
             print('PHASE_COMPLETE', index, variant, flush=True)
         compare(root)
     finally:
