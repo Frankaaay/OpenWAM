@@ -27,3 +27,38 @@ CPU 实测：H800 的 0GPU DSW，隔离 pytest 依赖位于 /mnt/workdir/frank/r
 pair04 / `dlcxbfjt7hdtztix`：同输入3次推理逐位相同；旧路径短回合重复84步，生成输入/chunk/执行动作/RNG全部相同；候选也是84步且上述全部相同，取图84->3。预热旧路径92.970s，候选47.407s，约1.96倍；首次含编译旧路径201.033s不能用于报告优化倍率。开始700步旧路径后平台明确 preempted/evicted，作业Failed；不是程序失败，保留所有结果，未完成长回合不计入门禁。
 
 后续同卡单模型诊断改为每个长回合旧/新紧邻完成并逐对保存比较，减少抢占时丢失进度；不缩短回合、不改变样本或资源。仍只申请1GPU闲时，队列开跑时间未知。
+
+pair05 在模型加载前因远端 SHA 不符而失败：此前 git pull 的 TLS/GnuTLS -110 错误没有更新 clone；HTTP/1.1 重试 fast-forward 成功后确认 clean HEAD，才启动 pair06。pair06 / `dlc3cufbfhv7iai9` 精确 SHA `8c72a64e6b4a49d56391075eef7c9f563bb6ae61`，1GPU闲时、priority4，输出 `/mnt/workdir/frank/runs/openwam-h800-eval-speed-20261103/pair06`。
+
+修正后的 CPU 定向测试最终 39 passed in17.81s。pair06 同输入推理及旧路径重复均逐位相同；85步成功回合预热旧90.10s、新44.26s，约2.04倍；700步失败旧605.824344s、新170.508445s，3.553倍，取图700->22。两样本输入/chunk/执行动作/RNG/初始状态/成功结果全部精确一致。1500步长回合仍在执行，尚未形成全套最终结论。诊断 comparison.json 中首次短旧路径包含编译，最终报告必须替换为 repeat/open_laptop-14.json 的预热计时，禁止引用首次短回合4.43倍。
+
+## 复现及后续入口
+
+已验证代码位于 `/mnt/workdir/frank/projects/OpenWAM-h800-eval-speed-20261103`，固定上述 SHA。配对诊断使用单卡 DLC 中的命令（OUTPUT 必须为新的独立绝对路径）：
+
+```bash
+/mnt/workdir/frank/envs/openwam-baselines-20261014/bin/python -u /mnt/workdir/frank/projects/OpenWAM-h800-eval-speed-20261103/tests/h800_eval_speed.py run "$OUTPUT" --shared
+```
+
+脚本自动设置原有运行库路径并依次执行同一模型实例中的旧/新客户端，不改正式结果。CPU DSW 仅用于查看日志，不能在其中执行此 GPU 命令。
+
+将来新评估沿用 FastWAM `scripts/c2r/evaluate.py rollout --root <新结果根>` 和原冻结 manifest。服务端使用候选 clone 的 `scripts/deploy.py`，原 ckpt-dir/ckpt-name 和推理参数保持不变；客户端 PYTHONPATH 中把原 OpenWAM 客户端根替换为候选 clone，使 `benchmarks.robotwin.openwam2robotwin_interface.SharedPlanPolicy` 来自同一候选版本。保持现有 client-deps、FastWAM/src 和 projects 路径及 Vulkan/LD_LIBRARY_PATH 环境。两端同时更新才能通过协议版本1门禁。缓存优化只用于已验证的静态灯光、禁用视频 Clean 合同；未修改或重启任何既有正式作业，也未创建正式全量评估。
+
+## 最终验收结果
+
+pair06 作业 `dlc3cufbfhv7iai9` 已由 GetJob 确认 **Succeeded**（PyTorchJob successfully completed），所有子进程正常收尾，单卡验证结束。测试代码 SHA `8c72a64e6b4a49d56391075eef7c9f563bb6ae61`；之后仅补充本记录。
+
+| 冻结样本 | 结果/动作数 | 预热旧路径秒 | 候选秒 | 提速 | 取图次数旧→新 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| open_laptop / ordinal14 / seed100014 | 成功 /85 |90.101209|44.257865|2.0358×|85→3|
+| open_laptop / ordinal1 / seed100001 | 失败 /700 |605.824344|170.508445|3.5530×|700→22|
+| open_microwave / ordinal99 / seed100132 | 失败 /1500 |1167.114856|281.576400|4.1449×|1500→47|
+| 合计 |2285动作|1863.040410|496.342710|3.7535×|2285→72|
+
+总耗时减少73.36%，包含各回合环境setup。短回合旧路径计时采用 `repeat/open_laptop-14.json`，其余采用 `baseline/*.json`，候选采用 `candidate/*.json`；不包含模型加载时间，也不将冷启动编译混入收益。原始 comparison.json 保留原始首次冷短回合计时，内含 aggregate_speedup=3.9673，**不能作为最终预热提速结论**；上述3.7535才是按公平计时重算的汇总。
+
+`comparison.json`：passed=true、failures=[]、exact_generation_inputs=true、exact_chunks=true、generation_counts=[72,72]；所有2285个执行动作误差0、逐步环境RNG相同、初始场景/观测相同、任务结果相同。同输入预热重复与旧路径短回合重复也通过精确门禁。CPU定向测试39项通过。优化不改变checkpoint、采样/CFG/compile/cache、模型seed、任务计划、instruction或步数上限。
+
+证据局限：仅两个任务三个诊断样本，不能替代50任务×100回合全量成绩；精确一致结论固定同一预热模型实例。独立冷启动存在已记录的BF16非逐位复现，未通过调容差掩盖。动态灯光/视频录制不在此缓存合同支持范围。实际硬件是该H800集群的单张L20Y/Hopper80GiB，不宣称商品型号H800。既有正式作业、代码和环境均未切换。
+
+达到用户要求的重大提速后停止追加优化；后续正式评估可使用上述双端候选入口及独立结果根，本轮未启动全量任务。
