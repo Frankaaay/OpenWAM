@@ -1,0 +1,15 @@
+# H800 单卡测评提速
+
+用户已授权独立 branch/worktree、commit/push，以及最小客户端/服务端缓存合同和对照脚本；只用 H800 一张闲时 GPU，不修改现有正式作业。
+
+分支 `frank/h800-eval-speed`，基于当前 H800 服务端 `9259a320a5945f15eab8167f1a888f5238971eb2`；客户端文件先对齐正在使用的 `4a06f9a3c78a40605fb3a4f56d60dffb1251c220`，避免把已有 shared-plan/四元数修正混成提速效果。
+
+实现：服务器响应明确给出 `needs_observation`；只有同步动作缓存非空时允许不带图像的 `cached_action` 请求。保持每动作一次服务器调用、原生 binary-command 投影和 EEF 转换。async 始终需要新观测，reset 后必须新取图；不推测 horizon。SharedPlanPolicy 要求协议版本 1，禁用歧义网络请求自动重发，并拒绝动态灯光/视频记录模式；不改模型参数。
+
+验证：静态 AST 与 diff 检查；追加既有 server tests 验证 horizon=1/3/32 的动作顺序、生成条件、二值投影、重规划边界和 reset。Windows 系统 Python 缺 pytest，完整 CPU 测试拟在已有 H800 CPU 环境执行。首次本机读文件默认 GBK 解码失败，已明确 UTF-8 后重新检查；此失败未到达远端。
+
+真实对照入口：`tests/h800_eval_speed.py run <独立输出目录>`。复用 FastWAM 冻结 evaluator 的 `rollout_case`，使用原任务计划中的 open_laptop/14（历史短成功）、open_laptop/1（历史失败）、open_microwave/99（历史1500步失败）。不改变这些回合的上限、seed、instruction。先旧服务器/旧客户端，再候选服务器/候选客户端，同一 GPU 顺序执行；对比所有生成输入、动作 chunk、每步执行动作、环境 RNG、初始场景/图像、成功结果和耗时。保留原生模型 seed/compile/cache 设置，不根据期望成绩调整。
+
+checkpoint：`/mnt/workdir/frank/runs/robotwin-u15853-mono-20261101/openwam/checkpoints/2026-11-01_22-36-55/checkpoint_step_30000.safetensors`，28,010,055,404 bytes。基线服务器/客户端与 FastWAM 路径在脚本中明确绑定，candidate 必须 clean。当前没有真实 GPU 结论；排队开始 ETA 未知，首轮预计约 45–90 分钟（含模型加载/编译，需首轮实测修订）。
+
+小样本用于验证与定位，不替代正式全量分数。若动作/输入出现无法解释的差异，不启用候选。
