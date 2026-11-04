@@ -18,7 +18,7 @@ export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
 export MASTER_PORT=29579
 export PYTHONUNBUFFERED=1
 test -z "$(git -C "$B/code/OpenWAM-run" status --porcelain)"
-for p in "$B/prepared-stride06-20261102/droid.sqlite" "$B/prepared-stride06-20261102/droid-stats.json" "$B/prepared-stride06-20261102/abc-stats.json"; do test -s "$p"; done
+for p in "$B/prepared-stride08-20261104/droid.sqlite" "$B/prepared-stride08-20261104/droid-stats.json" "$B/prepared-stride08-20261104/abc-stats.json"; do test -s "$p"; done
 mkdir -p "$MIDTRAIN_OUTPUT"
 # A completed trainer_state.json is published atomically after all state shards.
 # An interrupted save has no marker and is never selected for requeue recovery.

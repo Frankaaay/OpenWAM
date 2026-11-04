@@ -27,11 +27,11 @@ from dataloader.pretrain.windows import build_timeline_layout
 
 LAYOUT = build_timeline_layout(((0, 16),), 2)
 SLOTS = torch.tensor([*range(10), *range(34, 44)])
-WINDOW_STRIDE = 6
+WINDOW_STRIDE = 8
 
 
 class SparseABCOrionDataset(ORIONPretrainDataset):
-    """Keep Orion's physical timeline while spacing episode anchors by 0.6s."""
+    """Keep Orion's physical timeline while spacing episode anchors by 0.8s."""
 
     def _locate_window(self, index):
         episode, window = super()._locate_window(index)
@@ -100,7 +100,7 @@ class ABCOrionDataset(BaseDataset):
         self.input_mode = input_mode
         self._dataset_dir = Path(root)
         if stats_path and json.loads(Path(stats_path).read_text())['statistics'].get('window_stride_rgb') != WINDOW_STRIDE:
-            raise ValueError('ABC normalization does not match the 0.6s window contract')
+            raise ValueError('ABC normalization does not match the 0.8s window contract')
         self.dataset = abc_orion(root, stats_path, split)
         self._eps_df = pd.DataFrame({'episode_index': [e['episode_index'] for e in self.dataset._episodes]})
         self._cum_n_starts = np.array([0, *self.dataset._episode_window_ends], dtype=np.int64)
@@ -191,8 +191,8 @@ class DROIDOrionDataset(BaseDataset):
         self.index_path = str(index_path)
         self._dataset_dir = Path(index_path).parent / 'droid'
         self.stats = json.loads(Path(stats_path).read_text()) if stats_path else None
-        if self.stats and self.stats['statistics'].get('window_stride_s') != 0.6:
-            raise ValueError('DROID normalization does not match the 0.6s window contract')
+        if self.stats and self.stats['statistics'].get('window_stride_s') != 0.8:
+            raise ValueError('DROID normalization does not match the 0.8s window contract')
         with closing(sqlite3.connect(f'file:{self.index_path}?mode=ro', uri=True)) as con:
             rows = con.execute('select id, episode from windows where split=? order by episode,id', (split,)).fetchall()
         if not rows:

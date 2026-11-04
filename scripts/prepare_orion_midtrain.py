@@ -114,7 +114,7 @@ def index_droid(manifest, audit_dir, output):
     con.execute('create index windows_split_episode on windows(split,episode,id)')
     con.commit()
     con.close()
-    write_json(output / 'droid-admission.json', dict(windows=counts, episodes=len(episode_ids), excluded=list(excluded.values()), original_windows=summary['windows'], window_stride_s=0.6, camera_rejected=rejected_counts))
+    write_json(output / 'droid-admission.json', dict(windows=counts, episodes=len(episode_ids), excluded=list(excluded.values()), original_windows=summary['windows'], window_stride_s=0.8, camera_rejected=rejected_counts))
 
 
 def _droid_target_batch(indices):
@@ -182,7 +182,7 @@ def droid_stats(output):
                      window_exclusions=str(output / 'droid-window-exclusions.jsonl'))
     admission_path.write_text(json.dumps(admission, indent=2))
     result = dict(schema_version=NGAD_CANONICAL_SCHEMA, gripper_open_value=[1., 1.], gripper_closed_value=[0., 0.],
-                  statistics=dict(method='population_zscore_parallel_welford', train_windows=train_windows, rgb_rate_hz=10, action_rate_hz=20, window_stride_s=0.6))
+                  statistics=dict(method='population_zscore_parallel_welford', train_windows=train_windows, rgb_rate_hz=10, action_rate_hz=20, window_stride_s=0.8))
     for name, moments in [('state', state), ('action', action)]:
         stats = moments.result(1e-5, required)
         for field in ('mean', 'std', 'min', 'max'):
@@ -331,7 +331,7 @@ def compute_zscore_statistics(
         "action_tcp_max": action["max"].tolist(),
         "statistics": {
             "method": "population_zscore_parallel_welford",
-            "scope": "all admitted 0.6s-window canonical state/action targets",
+            "scope": "all admitted 0.8s-window canonical state/action targets",
             "window_stride_rgb": WINDOW_STRIDE,
             "std_floor": float(std_floor),
             "rgb_rate_hz": dataset.rgb_rate_hz,

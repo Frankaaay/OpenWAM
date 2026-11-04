@@ -37,7 +37,7 @@ class MidtrainContractTests(unittest.TestCase):
             _state_interpolation_indices=SparseABCOrionDataset._state_interpolation_indices)
         result = module.compute_zscore_statistics(dataset, progress_every=0)
         absolute, relative = [], []
-        for anchor, phase in [(0,0), (12,1)]:
+        for anchor, phase in [(0,0), (16,1)]:
             def x(t):
                 position=t*1.5+phase
                 lo=int(np.floor(position)); hi=int(np.ceil(position))
@@ -52,10 +52,10 @@ class MidtrainContractTests(unittest.TestCase):
     def test_sparse_abc_anchors_keep_physical_episode_length(self):
         dataset = object.__new__(SparseABCOrionDataset)
         dataset._episodes = [dict(rgb_target_length=20), dict(rgb_target_length=9)]
-        dataset._episode_window_ends = [4, 6]
-        dataset._length = 6
-        self.assertEqual([dataset._locate_window(i)[1] for i in range(6)], [0, 6, 12, 18, 0, 6])
-        self.assertEqual(dataset._locate_window(3)[0]['rgb_target_length'], 20)
+        dataset._episode_window_ends = [3, 5]
+        dataset._length = 5
+        self.assertEqual([dataset._locate_window(i)[1] for i in range(5)], [0, 8, 16, 0, 8])
+        self.assertEqual(dataset._locate_window(2)[0]['rgb_target_length'], 20)
 
     def test_fixed_warmup_matches_optimizer_updates_at_world16(self):
         script = Path(__file__).parents[1] / 'openwam/train/utils/training_utils.py'
@@ -75,20 +75,20 @@ class MidtrainContractTests(unittest.TestCase):
             optimizer.step(); scheduler.step()
         self.assertAlmostEqual(optimizer.param_groups[0]['lr'], 1e-6)
 
-    def test_droid_reindex_uses_real_06s_windows_and_reports_gaps(self):
+    def test_droid_reindex_uses_real_08s_windows_and_reports_gaps(self):
         script = Path(__file__).parents[1] / 'scripts/prepare_orion_midtrain.py'
         spec = importlib.util.spec_from_file_location('prepare_midtrain', script)
         module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            rows = [dict(target_ns=i*100000000, capture_ns=i*100000000, source_frame=i, row=i) for i in range(30)]
+            rows = [dict(target_ns=i*100000000, capture_ns=i*100000000, source_frame=i, row=i) for i in range(34)]
             data = json.dumps(rows).encode(); (root/'sampling.json').write_bytes(data)
             camera = dict(sampling_path='sampling.json', sampling_sha256=hashlib.sha256(data).hexdigest())
             record = dict(table_root=str(root), camera_specs=[camera]*3, target_ns=[0],
                           time_tolerance_ns=1, cross_camera_tolerance_ns=1,
                           episode_id='test@0', source_episode_id='test', split='train')
             windows, rejected = module.droid_episode_windows(record)
-            self.assertEqual([json.loads(x)['target_ns'][0] for x in windows], [0,600000000,1200000000])
+            self.assertEqual([json.loads(x)['target_ns'][0] for x in windows], [0,800000000,1600000000])
             self.assertEqual(rejected, [])
             rows.pop(10); data=json.dumps(rows).encode(); (root/'sampling.json').write_bytes(data)
             camera['sampling_sha256']=hashlib.sha256(data).hexdigest()

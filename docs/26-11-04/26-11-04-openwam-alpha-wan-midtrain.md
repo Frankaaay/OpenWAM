@@ -30,3 +30,20 @@ Live completion audit: DLCdlcnftg5nil8d64g Succeeded and ALPHA_WAN_IDLE_SMOKE_PA
 
 User explicitly authorized skipping modelcard and queueing16H100 idle GPUs. No protected reservation created. Added committed two-node8GPU launcher using h100 partition, no manualQOS/reservation,7day walltime,requeue. Formal configuration unchanged: natural4264016-window mixture,1epoch,batch2/rank,accum4/global128,bothLR1e-4,warmup500factor.1,offlineW&Bowmaw04f,originalnorms,mono-left,AlphaVideo+Actionweights,frozennativeWanVAE/T5. Resume selects only atomic trainer_state.json complete markers under this run's ownoutput; existingloader restoresfullstate. Requeue may roll back work since lastcompleteperiodic save; no claim of savewithin90sec preemptiongrace. SingleGPU smoke accepted; runtime16GPUrecovery remains to be observed. Modelcardauthorization wasblockedbybase:field:read; userexplicitexception supersedesworkflow gate for this run.
 
+
+## Formal idle submission receipt
+
+2026-11-04: submitted Job 53318, published source d7e505aad97853604ae4edc2f96736aef39b84e5 on frank/eighteen-preparation. Live state PENDING/Priority; AdminComment=h100:idle, 2 nodes x 8 GPUs, Requeue=1. No protected booking or model card created under user's explicit exception.
+
+Actual scheduler TimeLimit=2-00:00:00 despite launcher requesting 7 days. Standard update to 7 days rejected: H100: Extending a job requires resubmission. Retained the queued job, no policy bypass or duplicate submission. Preemption requeue and completed-checkpoint recovery are configured; timeout continuation is not established. If the epoch exceeds 48 hours, another submission/resume is necessary. Wan Alpha 16-GPU throughput and full-epoch ETA remain unmeasured.
+
+Output: /gpfs/jiuquyun/projects/Frank/openwam-alpha-midtrain-20261104/formal
+Log: /gpfs/jiuquyun/home/Frank/logs/openwam-droid-abc-alpha-wan-53318.out
+W&B offline ID owmaw04f; display name OpenWAM DROID+ABC Alpha Wan mono-left midtrain.
+
+Configuration: frozen native Wan VAE and T5; Alpha checkpoint_step_154000 initializes both Video and Action DiTs; mono-left; DROID+ABC 4,264,016 train windows, stride 0.6s, natural proportions, 1 epoch; 17 RGB at 10 Hz, 34 actions at 20 Hz; global batch 128 (16 x 2 x 4); both peak LR 1e-4, warmup 500, cosine floor 1e-6; bf16, ZeRO2, gradient checkpointing, no formal CPU optimizer offload; validation startup/end/every500 updates, 128 windows/source; full checkpoint every2500 updates and startup/end.
+
+
+## 0.8s protected-resource revision
+
+User requested 0.8s window-start stride for both sources and model-card/protected 16-H100 submission. Cancelled pending old-stride job53318 before it ran. Updated the existing stride contract and its CPU tests to 8 RGB ticks; window horizon and supervision unchanged. New indices/stats target prepared-stride08-20261104, preserving old artifacts. Both training launcher paths updated; offline run ID retained because old job never initialized. Python AST and diff checks passed; local functional test unavailable because local Python lacks h5py. Run contract tests with the existing remote preparation runtime before preparation. Model-card API currently blocks on missing base:field:read scope; requested user OAuth scopes for field/record reading and record creation/update. Protected booking/submission pending authorization and live conflict check.
