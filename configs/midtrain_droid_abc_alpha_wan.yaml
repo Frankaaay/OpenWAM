@@ -1,0 +1,22 @@
+defaults:
+  - midtrain_droid_abc
+  - _self_
+
+model:
+  video_backbone:
+    model_path: null
+    encoder: null
+
+dataloader:
+  datasets:
+    droid:
+      input_mode: mono-left
+    abc:
+      input_mode: mono-left
+
+training:
+  finetune_ckpt_path: ${oc.env:MIDTRAIN_ALPHA_ROOT}
+
+project:
+  wandb:
+    run_name: OpenWAM DROID+ABC Alpha Wan mono-left midtrain

@@ -94,7 +94,10 @@ def abc_orion(root, stats_path, split):
 class ABCOrionDataset(BaseDataset):
     action_dim = 80
 
-    def __init__(self, root, stats_path, split):
+    def __init__(self, root, stats_path, split, input_mode='stereo'):
+        if input_mode not in ('stereo', 'mono-left'):
+            raise ValueError(f'Unsupported input_mode: {input_mode}')
+        self.input_mode = input_mode
         self._dataset_dir = Path(root)
         if stats_path and json.loads(Path(stats_path).read_text())['statistics'].get('window_stride_rgb') != WINDOW_STRIDE:
             raise ValueError('ABC normalization does not match the 0.6s window contract')
@@ -115,14 +118,14 @@ class ABCOrionDataset(BaseDataset):
                                           sample['state_feature_mask'][:20].unsqueeze(0))
         video = sample['video'].permute(1, 0, 3, 4, 2).numpy()
         left, right = mosaic([video[0]]), mosaic([video[1]])
-        return dict(video=left, right_video=right, first_frame_image=[left[0]], vace_video=None,
+        return dict(video=left, right_video=right if self.input_mode == 'stereo' else None, first_frame_image=[left[0]], vace_video=None,
                     action=action, action_mask=action_mask, proprio=proprio, proprio_mask=proprio_mask,
                     video_mask=sample['frame_valid'], prompt=sample['prompt'],
                     episode_index=sample['data_info']['episode_index'])
 
     @classmethod
     def from_config(cls, cfg, split='train'):
-        return cls(get_cfg(cfg, 'dataset_dir'), get_cfg(cfg, 'stats_path'), split)
+        return cls(get_cfg(cfg, 'dataset_dir'), get_cfg(cfg, 'stats_path'), split, get_cfg(cfg, 'input_mode', 'stereo'))
 
 
 @lru_cache(maxsize=8)
@@ -181,7 +184,10 @@ def droid_targets(record):
 class DROIDOrionDataset(BaseDataset):
     action_dim = 80
 
-    def __init__(self, index_path, stats_path, split):
+    def __init__(self, index_path, stats_path, split, input_mode='stereo'):
+        if input_mode not in ('stereo', 'mono-left'):
+            raise ValueError(f'Unsupported input_mode: {input_mode}')
+        self.input_mode = input_mode
         self.index_path = str(index_path)
         self._dataset_dir = Path(index_path).parent / 'droid'
         self.stats = json.loads(Path(stats_path).read_text()) if stats_path else None
@@ -238,11 +244,11 @@ class DROIDOrionDataset(BaseDataset):
         task = source_meta.get('current_task')
         if not isinstance(task, str) or not task.strip():
             raise ValueError(f'DROID missing instruction: {metadata["id"]}')
-        return dict(video=left, right_video=right, first_frame_image=[left[0]], vace_video=None,
+        return dict(video=left, right_video=right if self.input_mode == 'stereo' else None, first_frame_image=[left[0]], vace_video=None,
                     action=action, action_mask=action_mask, proprio=proprio, proprio_mask=proprio_mask,
                     video_mask=torch.ones(17, dtype=torch.bool),
                     prompt="A video recorded from a robot's point of view executing the following instruction: " + task)
 
     @classmethod
     def from_config(cls, cfg, split='train'):
-        return cls(get_cfg(cfg, 'index_path'), get_cfg(cfg, 'stats_path'), split)
+        return cls(get_cfg(cfg, 'index_path'), get_cfg(cfg, 'stats_path'), split, get_cfg(cfg, 'input_mode', 'stereo'))
