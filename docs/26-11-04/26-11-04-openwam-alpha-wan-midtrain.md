@@ -47,3 +47,33 @@ Configuration: frozen native Wan VAE and T5; Alpha checkpoint_step_154000 initia
 ## 0.8s protected-resource revision
 
 User requested 0.8s window-start stride for both sources and model-card/protected 16-H100 submission. Cancelled pending old-stride job53318 before it ran. Updated the existing stride contract and its CPU tests to 8 RGB ticks; window horizon and supervision unchanged. New indices/stats target prepared-stride08-20261104, preserving old artifacts. Both training launcher paths updated; offline run ID retained because old job never initialized. Python AST and diff checks passed; local functional test unavailable because local Python lacks h5py. Run contract tests with the existing remote preparation runtime before preparation. Model-card API currently blocks on missing base:field:read scope; requested user OAuth scopes for field/record reading and record creation/update. Protected booking/submission pending authorization and live conflict check.
+
+Published source e5e4984; H100 own clean clone fast-forwarded. Reused CPU preparation launchers with stride08 output paths; bash -n and sbatch --test-only passed. Submitted DROID53352 (contract tests then index+stats), ABC53353 (stats). GPU protected submission remains blocked on Feishu authorization, no new GPU job submitted.
+
+DROID53352 exited before indexing: direct tests/test_midtrain_contract.py invocation put tests/dataloader ahead of Orion's dataloader. Corrected launcher to cd repository and python -m unittest tests.test_midtrain_contract; resubmitted as53354. ABC53353 observed RUNNING with statistics progress. No data/semantic change for this startup fix.
+
+
+# OpenWAM Alpha Wan stride0.8 protected queue receipt
+
+Model card: https://w79rvfxw83.feishu.cn/base/HikJbmqosaZDdTsJ7INcNHE1nQc?table=tblBYVmMJLV8vKTh&record=reczz28VWPvDhNQz
+Bookings: reczz28VWQG4SUdF / reczz28VWQG4UbZ9; reverse links verified.
+Owner: Frank / ou_cc82be717e860a68e47db3cbb968372e; Slurm Frank.
+Nodes: xn01-gpu1-0054 and xn01-gpu1-0062, 8 H100 each.
+Protection booking: 2026-11-04T16:00:00+08:00 to 2026-11-07T16:00:00+08:00.
+All 20 prior booking rows read (has_more=false); no overlapping active bookings on these nodes. Cancelled records do not reserve resources.
+
+Job53358 submitted 2026-11-04 15:43:03 +08:00. PENDING/Dependency; afterok:53353:53354. Actual time limit72h, Requeue1. Not started, protection classification pending synchronization/booking time. Old job53318 cancelled before training.
+Command: sbatch --parsable --dependency=afterok:53353:53354 --begin=2026-11-04T16:00:00 --nodelist=xn01-gpu1-0054,xn01-gpu1-0062 --time=3-00:00:00 /gpfs/jiuquyun/projects/Frank/openwam-midtrain-20261101/code/OpenWAM-run/scripts/train_h100_alpha_wan.sbatch
+Code: e5e4984100cbc6b4107470c0365cde87bc76600b, frank/eighteen-preparation, https://github.com/Frankaaay/OpenWAM; remote clean clone confirmed. Config midtrain_droid_abc_alpha_wan.
+Data index/norm: /gpfs/jiuquyun/projects/Frank/openwam-midtrain-20261101/prepared-stride08-20261104; rebuild ongoing. Final window count pending.
+Frozen native Wan VAE/T5; full OpenWAM Alpha checkpoint_step_154000 initializes both DiTs; mono-left; stride0.8s,17RGB@10Hz,34actions@20Hz; fixed-anchor measured-state relative-pose supervision, DROID missing arm masked; natural mixture,1epoch; globalbatch128=16x2x4; both LR1e-4,warmup500,cosine floor1e-6; bf16,ZeRO2,no CPU optimizer offload; validation at start/end/every500updates,128/source; fullstate checkpoints every2500updates/start/end.
+W&B offline ID owmaw04f; name OpenWAM DROID+ABC Alpha Wan mono-left midtrain.
+Output /gpfs/jiuquyun/projects/Frank/openwam-alpha-midtrain-20261104/formal
+Log /gpfs/jiuquyun/home/Frank/logs/openwam-droid-abc-alpha-wan-53358.out
+7 CPU contract tests passed. Prior one-GPU Alibaba Alpha Wan smoke passed; no16-GPU throughput or current-epoch completion claim.
+No new model output yet. Requeue selects latest completed fullstate; timeout continuation needs resubmission. Reservation expiry removes protection and does not extend run time.
+
+
+## Alibaba 16 idle GPU migration
+
+User withdrew H100 modelcard/bookings and requested Alibaba16 idle GPUs. Cancelled53358 at microstep1321; only complete step0 checkpoint exists, retain all artifacts and restart from Alpha on cloud. Cancelled bookings reczz28VWQG4SUdF/reczz28VWQG4UbZ9; modelcard marked withdrawn/terminated after physical deletion was rejected for missing base:record:delete. DROID/ABC stride08 preparation completed:1667932/1538510 train windows, total3206442; DROID val86756 and ABCval21805. CPU DLC audit dlc17rucjvbfj0rw confirmed existing cloud ABC and DROID imagery but no DROID raw state. CPU-only DSW dsw-4gpdclcrpjz496v51r receives exact admitted H100 indices/stats and full trajectory H5s; transfer CPUjob53376. No GPU in this transfer instance. Added minimal DLC launcher reusing official WORLD_SIZE/RANK/MASTER_ADDR/MASTER_PORT and16GPU train contract. Model/state files and original indexing are preserved bytewise; container path alias resolves original H100 paths into personal cloud storage. Completed checkpoint selection preserved. Official env reference: https://help.aliyun.com/en/pai/general-environment-variables .
