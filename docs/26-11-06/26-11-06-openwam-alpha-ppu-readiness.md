@@ -248,3 +248,22 @@
 - 正式输出：/mnt/workdir/frank/runs/openwam-alpha-ppu-midtrain-20261106/stereo-subset-stride08。W&B offline ID owma-ppu32-stereo-1106，实验名OpenWAM DROID+ABC Alpha Wan mono-left midtrain。
 - 32卡GPU作业尚未提交；32卡通信、完整状态保存/恢复尚未实测。正式入口要求formal-ppu32-source.json提供已发布SHA，该文件尚未激活。按AGENTS，下一步需明确授权仅提交/推送本次4个生产文件及两份任务记录，随后部署精确SHA、提交请求并做一次启动健康检查。
 - 不新增加速benchmark。按8卡吞吐理想线性外推32卡纯训练约20小时，非32卡实测ETA，不含启动/验证/保存/排队/抢占；启动后依据实际吞吐更新。
+
+### 21:06 CST 发布与1.5正式排队，开始1.1兼容核验
+
+- 用户明确授权commit/push、1.5排队，以及排队后核验1.1；仅在1.1与1.5一致时切换到1.1正式训练。没有授权改变数据或训练语义。
+- 本次仅6个具名文件提交为1896bf723fac78d04269467e0c1519a4a98a8a92，推送Frankaaay/OpenWAM的frank/eighteen-preparation。用户其他dirty文件均保留。部署CPU作业dlccnz3t7ni38uwe Succeeded；远端clean source从f4668f9 fast-forward，4个候选源码指纹全部匹配，formal-ppu32-source.json已激活精确SHA。
+- 1.5正式32GPU作业dlct1b5e373u30a6已提交并实读Queuing，research quota1rpp98rnebp，4节点×8卡，priority4、闲时资源，72h上限；尚未产生GPU训练健康证据。
+- 1.1有界1GPU访问探针dlcxr48wblbf6vc6在EnvPreparing失败，无进程日志；事件显示网络vsc/vpc未挂接后DeadlineExceeded。不是模型失败或数值不一致证据。探针采用PPU11官方Torch2.6/CUDA12.8镜像，PPU15 CPFS只读挂/mnt/workdir、PPU11盘挂/mnt/ppu11；未复制训练数据或替换PPU框架。
+- 有界重试dlc1d0hwy3ai03t9，平台上限30min、命令timeout600s，等待启动核验。1.5排队保留；在1.1实际通过之前不切换正式训练。
+
+### 21:11 CST 1.1验证结果：存储接入阻塞，未切换正式训练
+
+1.5正式32卡作业dlct1b5e373u30a6最近实读Queuing，保留该队列。发布代码1896bf723fac78d04269467e0c1519a4a98a8a92已部署，生产文件指纹与CPU预检一致。
+
+1.1探针结果：
+- dlcxr48wblbf6vc6、dlc1d0hwy3ai03t9：同时挂1.5资产盘与1.1原生盘，均在容器执行前失败，vsc&vpc not attached / DeadlineExceeded。
+- dlc1wfphqj3i4vu9：仅挂1.1原生盘，Succeeded；Torch2.6.0/CUDA12.8、PPU-ZW810E，torch.ones(4,device=cuda).sum()=4.0，基础设备运算通过。
+- dlch3u0i3stdh6cl：仅挂1.5资产盘只读，同节点再次在网络初始化失败，同样vsc&vpc not attached / DeadlineExceeded。无应用日志。
+
+这些结果将阻塞定位到当前跨盘接入请求的启动路径，尚不能断言服务永远不支持跨代挂载；也不能把基础GPU运算当作OpenWAM训练一致性证明。数据读取、Alpha前后向、loss/梯度/更新对比均未执行，条件不满足，不转移正式训练、不取消1.5队列。所有1.1短探针均已终态，无遗留验证作业。未复制数据/模型、未更改共享网络或存储权限。下一步需要平台修复/提供可用的1.1访问1.5资产盘路径；若改用资产迁移，应另行核对明确源/目的/字节数并取得迁移授权。没有发送外部消息。
