@@ -1,0 +1,26 @@
+defaults:
+  - midtrain_droid_abc_alpha_wan
+  - _self_
+
+dataloader:
+  datasets:
+    droid:
+      type: droid_ppu_orion
+      index_path: ${oc.env:MIDTRAIN_DROID_ROOT}/prepared/droid.sqlite
+      stats_path: ${oc.env:MIDTRAIN_DROID_ROOT}/prepared/droid-stats.json
+      state_root: ${oc.env:MIDTRAIN_DROID_ROOT}/h100-state-view
+      image_root: ${oc.env:MIDTRAIN_DROID_IMAGES}
+    abc:
+      type: abc_nativecrop_orion
+      dataset_dir: ${oc.env:MIDTRAIN_PREP}
+      stats_path: ${oc.env:MIDTRAIN_PREP}/abc-stats.json
+
+training:
+  initialize_model_on_cpu: true
+  gradient_accumulation_steps: 2
+  # save_steps counts microsteps; 5000 / 2 = 2500 optimizer updates.
+  save_steps: 5000
+
+project:
+  wandb:
+    run_name: OpenWAM DROID+ABC Alpha Wan mono-left midtrain

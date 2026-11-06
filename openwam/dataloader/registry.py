@@ -51,6 +51,10 @@ def build_dataset(config, split: str = "train") -> BaseDataset:
         Instantiated dataset.
     """
     dtype = get_cfg(config, "type")
+    if dtype in ("abc_nativecrop_orion", "droid_ppu_orion") and dtype not in DATASET_REGISTRY:
+        from openwam.dataloader.orion_midtrain_ppu import ABCNativeCropOrionDataset, DROIDPPUOrionDataset
+        register_dataset("abc_nativecrop_orion")(ABCNativeCropOrionDataset)
+        register_dataset("droid_ppu_orion")(DROIDPPUOrionDataset)
     if dtype in ("abc_orion", "droid_orion") and dtype not in DATASET_REGISTRY:
         from openwam.dataloader.orion_midtrain import ABCOrionDataset, DROIDOrionDataset
         register_dataset("abc_orion")(ABCOrionDataset)
