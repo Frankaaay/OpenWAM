@@ -133,3 +133,7 @@ FastWAM定向修改checkpoints.py/student.py/stereotok_vae.py并新增tests/test
 拟GPU验收：先PPU1.5单节点8卡，batch2/accum8维持global128，短程真实DROID+ABC双目forward/backward（正式32卡仍accum2）；逐项比较mono/stereo左图和监督，strict-load完整Stage3、验证冻结codec与Alpha非codec权重，检查finite losses/grad和显存；测试保存/重载metric_head；通过后再验32卡collectives，正式训练单独输出/run ID。不得复用原Wan launcher的自动恢复目录或WANDB_RUN_ID。
 
 用户已明确授权本次修改commit/push，只做PPU1.5 8卡smoke；完成后必须停下并等用户确认，不能启动正式32卡训练。新增tests/smoke_ppu_stereotok_midtrain.py是有界验收入口：先与已完成Wan源码1896bf7比较真实train/val样本（两源、相位、group01补右目/group02原右目、尾窗）、完整解析配置差异白名单、Alpha所有非codec tensor逐项比对，再8卡batch2/accum8/global128执行24micro/3updates，scheduler仍用25051updates，做验证、保存full-state、load后继续一步、独立部署骨架与codec参数重载。GPU结果未取得前不宣称干净对照验收完成。正式32卡不在此次提交范围。
+
+已发布OpenWAM fc034e10a20ab3eb9b39a4b39077e56f7481bd95、FastWAM491e518fac6e04646ecfbd464027dd575ed99bde；CPU部署dlc19wqz9nna2pvy在/mnt/workdir/frank/projects/openwam-stereotok-stage3-u8000-20261109/{openwam,fastwam}核对clean+SHA通过。8卡smoke dlc1wxta1775ak16已提交，quota1rpp98rnebp/ForceQuotaOverSold，单节点8GPU/64CPU/768Gi/90min，输出/mnt/workdir/frank/runs/openwam-stereotok-stage3-u8000-smoke-20261109/attempt1。当前EnvPreparing，尚无通过证据；没有提交32卡训练。
+
+首轮8卡dlc1wxta1775ak16在导入阶段失败，尚无训练：直接运行tests下脚本使tests/dataloader遮蔽Orion dataloader.pretrain。定向修正smoke入口sys.path[0]为仓库根，不修改生产数据/模型代码；先以CPU验证导入再重试。

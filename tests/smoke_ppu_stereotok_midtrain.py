@@ -8,6 +8,9 @@ import sys
 import time
 import types
 
+# Running a file under tests/ must not shadow Orion's top-level dataloader package.
+sys.path[0] = str(Path(__file__).resolve().parents[1])
+
 import numpy as np
 import torch
 from hydra import compose, initialize_config_dir
