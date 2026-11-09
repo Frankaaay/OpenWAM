@@ -70,6 +70,20 @@ def data_parity(cfg, baseline_cfg):
     print('DATA_PARITY_PASSED',len(checked),flush=True)
 
 
+def reload_deployment(output):
+    checkpoint=Path(output)/'checkpoint_step_16.safetensors'
+    _,restored,_=build_architecture_from_ckpt_dir(str(checkpoint),weights_required=True)
+    assert hasattr(restored.video_backbone.video_encoder._m.model,'metric_head')
+    state=restored.state_dict()
+    with safe_open(str(checkpoint),framework='pt',device='cpu') as saved:
+        assert set(saved.keys())==set(state)
+        for key in saved.keys():
+            assert torch.equal(state[key].cpu(),saved.get_tensor(key).to(state[key].dtype)),key
+    assert not any(p.requires_grad for p in restored.video_backbone.video_encoder.parameters())
+    print('DEPLOY_ALL_TENSORS_RELOAD_EXACT',len(state),flush=True)
+    return restored
+
+
 def main():
     torch.set_num_threads(4)
     with initialize_config_dir(version_base=None, config_dir=str(ROOT/'configs')):
@@ -186,8 +200,7 @@ def main():
             torch.cuda.synchronize();report('validation_end_'+name,3,losses,time.monotonic()-t)
     if acc.is_main_process:
         # Reconstruct the saved self-contained deployment including metric_head.
-        _,restored,_=build_architecture_from_ckpt_dir(str(OUTPUT/'checkpoint_step_16.safetensors'),weights_required=True)
-        assert hasattr(restored.video_backbone.video_encoder._m.model,'metric_head')
+        restored=reload_deployment(OUTPUT)
         current=acc.unwrap_model(engine).video_backbone.video_encoder.state_dict()
         for k,v in restored.video_backbone.video_encoder.state_dict().items():assert torch.equal(v.cpu(),current[k].cpu()),k
         del restored

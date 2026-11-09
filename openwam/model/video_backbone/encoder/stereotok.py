@@ -94,12 +94,16 @@ class StereoTokVideoEncoder(VideoEncoder):
         codec.requires_stereo = input_mode == "stereo"
         with torch.device("meta"):
             model = make_vae()
-            model.fusion = LAS2GuidedFusion(
-                model.encoder, geometry["encoder_geometry"], geometry["max_disparity"], initialize=False
-            )
             model.decoder.geometry_branch = GeometryDecoder(model.decoder)
             if geometry.get("metric_disparity", {}).get("shallow_head_weight", 0) > 0:
                 model.metric_head = MetricHead()
+        # timm's FasterNet constructor reads its drop-path schedule via item(),
+        # which requires real CPU tensors. Strict checkpoint loading below still
+        # supplies all persistent weights after to_empty materializes the codec.
+        with torch.device("cpu"):
+            model.fusion = LAS2GuidedFusion(
+                model.encoder, geometry["encoder_geometry"], geometry["max_disparity"], initialize=False
+            )
         codec.model = model
         # Nonpersistent normalization buffers are not supplied by a checkpoint.
         codec.to_empty(device=device)
