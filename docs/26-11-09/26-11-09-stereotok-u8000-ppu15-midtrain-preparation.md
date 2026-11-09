@@ -147,3 +147,15 @@ CPU预检dlc1jcekujid5mih完成DATA_PARITY_PASSED 32及CPU_PAIRED_DATA_PREFLIGHT
 第三轮实际完成两次optimizer update（loss 2.5734506、2.8148336；第二步13.4129s，峰值allocated45.2407GB），权重与8份optimizer分片均保存。立即load时非rank0在rank0写trainer_state.json前读取，报Incomplete full-state checkpoint；save_full_state最后collective在rank0发布marker之前。仅在smoke保存和立即加载间增加wait_for_everyone，保留完整性拒绝，不修改生产训练或保存格式。再次8卡完整重跑，尚不算smoke通过。
 
 第四轮dlcznfu2zslj5tj8（OpenWAM b99dc76）完成3次更新及8 ranks FULL_STATE_RELOADED，loss分别2.5734506/2.8148336/2.3680215；第二步14.6916s；第三步130.7252s含保存恢复，不能作纯训练速度。峰值allocated46.9461GB。开始验证DROID/ABC=1.9693826/1.3604431；结束验证使用另一组样本=2.7635396/1.5335252，不作loss下降比较。随后部署骨架重载失败：timm FasterNet在meta上下文构造drop-path schedule调用Tensor.item。局部修复from_skeleton仅LAS2GuidedFusion在CPU构建，其余大VAE继续meta，再统一to_empty和strict加载；不改变训练前向或参数。复用已有checkpoint_step_16做定向8进程部署严格重载验收，比较全部保存tensor，不重跑已通过的训练环节。第四轮Job仍记Failed，不能把平台失败写为成功。
+
+## 最终验收与停止（2026-11-09）
+
+最终生产代码OpenWAM 9b87cab7715c026cc5f4762dcb44fc9f95fcd094、FastWAM491e518fac6e04646ecfbd464027dd575ed99bde，均已发布。相对Wan实际1896bf7，OpenWAM生产代码只改双目reader、codec加载/骨架及新StereoTok配置；trainer、optimizer、scheduler实现没有变化。
+
+8卡训练与完整状态恢复证据来自dlcznfu2zslj5tj8，部署重载定向证据来自dlc189a9sbaqpjxi（Succeeded）。中间部署验证dlc1o2lq17afzffk因GitHub TLS拉取失败未运行模型；确认Failed后按同一请求重试。最终8个进程分别输出DEPLOY_ALL_TENSORS_RELOAD_EXACT 2666、DEPLOY_RANK_PASSED 0..7，父进程STEREOTOK_DEPLOY8_PASSED_STOPPED。所有保存tensor与实际严格加载结果按原生加载dtype逐项相等，metric_head存在且codec冻结。修复后没有再次重复完整训练环节；验收为训练/恢复+定向重载组合，不能声称第四轮单个Job成功或最终SHA完整单次smoke全绿。
+
+证据路径：/mnt/workdir/frank/runs/openwam-stereotok-stage3-u8000-smoke-20261109/attempt4/ 下data-parity.json、formal-config-delta.json、metrics.jsonl、checkpoint_step_16.safetensors、accel_state_step_16/、deployment-reload-result.json。训练任务在最后重载处失败，故其原result.json未生成，保留真实状态不补造通过标记。
+
+对照已核对：DROID1667932+ABC1538510训练窗口，原索引/归一化不变；ABC全部episode元数据相同；32个实际train/val窗口左目像素/监督逐项相同；Alpha非codec1893张量实际Wan/StereoTok加载结果exact；配置差异白名单通过；StereoTok与T5冻结；3次更新loss有限；8 ranks恢复后继续第3次更新；独立部署2666张量exact。限制：图像/监督为覆盖式抽样而非全量视频解码；仅8卡单节点，没有执行32卡多节点collective验收；约13.41–14.69s/update仅两次smoke的第2步观测，不是稳定吞吐基准。第3步计时含完整保存/恢复，不用于训练ETA。
+
+已按用户要求停止。未提交正式32卡任务，正式起点仍Alpha154000，不能从smoke checkpoint或Wan50101继续。用户确认后正式32卡batch2×accum2/global128、LR1e-4/warmup500/cosine1e-6、25051更新等维持原配方；本次8卡smoke仅accum8保持global128。正式启动授权仍待用户确认。
