@@ -4,7 +4,7 @@ Requires orion-data-pipeline/src on PYTHONPATH. This release uses raw gripper
 values, NOT the PushCart canonical openness contract. No FK or idle trimming.
 """
 import argparse
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from fractions import Fraction
 import hashlib
 import json
@@ -138,6 +138,13 @@ def convert(args):
             receive(topic, codec.decode(None))
     if any(len(v) != 1 or not next(iter(v)) for v in frame_ids.values()):
         raise ValueError('Empty or changing frame_id')
+    # Decode in packet order, then align in presentation/capture timestamp
+    # order. Source camera startup packets can emit late presentation frames.
+    # Never sort the compressed packets or silently merge duplicate stamps.
+    presentation_reorders = {}
+    for topic, rows in images.items():
+        presentation_reorders[topic] = sum(b[0] < a[0] for a,b in zip(rows, rows[1:]))
+        rows.sort(key=lambda row: row[0])
     streams = {**signals, **images}
     stamps = {}
     for topic, rows in streams.items():
@@ -223,6 +230,7 @@ def convert(args):
     result = dict(row, length=n, source_sha256=sha(source), state_path=str(data_path),
                   videos=video_paths, frame_ids={k: next(iter(v)) for k, v in frame_ids.items()},
                   geometry=geometry, initial_decode_errors=decode_errors, boundary_crop=boundary_crop,
+                  presentation_reorders=presentation_reorders,
                   alignment_error_ns={k: int(abs(v-grid).max()) for k, v in alignment.items()},
                   full_window_count=len(range(0, n-32, 2)), seconds=time.monotonic()-started)
     save(work / 'report.json', result)
@@ -288,11 +296,25 @@ def main():
     Path(args.audit).mkdir(parents=True, exist_ok=False)
     save(Path(args.audit)/'input.json', dict(arguments=vars(args), manifest_sha256=sha(args.manifest), code_sha256=sha(__file__)))
     jobs = [(r, args.source_root, args.output, args.audit) for r in rows]
-    records = []
+    records, errors = [], []
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
-        for result in pool.map(convert, jobs):
-            records.append(result)
-            print(json.dumps(dict(completed=len(records), total=len(rows), ordinal=result['ordinal'], frames=result['length'], seconds=result['seconds'])), flush=True)
+        pending = {pool.submit(convert, job): job[0] for job in jobs}
+        for future in as_completed(pending):
+            row = pending[future]
+            try:
+                result = future.result()
+            except Exception as exc:
+                error = dict(ordinal=row['ordinal'], source_file=row['source_file'], error_type=type(exc).__name__, error=str(exc))
+                errors.append(error)
+                save(Path(args.audit)/f"error-{row['ordinal']:03d}.json", error)
+                print(json.dumps(error), flush=True)
+            else:
+                records.append(result)
+                print(json.dumps(dict(completed=len(records), errors=len(errors), total=len(rows), ordinal=result['ordinal'], frames=result['length'], seconds=result['seconds'])), flush=True)
+    records.sort(key=lambda row: row['ordinal'])
+    if errors:
+        save(Path(args.audit)/'conversion_result.json', dict(successful_episodes=len(records), errors=errors, published=False))
+        raise RuntimeError(f'{len(errors)} recordings failed; no dataset published; see conversion_result.json')
     publish(records, args.output)
     save(Path(args.audit)/'conversion_result.json', dict(episodes=len(records), frames=sum(r['length'] for r in records),
          windows=sum(r['full_window_count'] for r in records), video_readback_verified=True, training_loader_verified=False))

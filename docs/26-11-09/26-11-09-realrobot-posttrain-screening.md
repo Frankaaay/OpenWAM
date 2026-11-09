@@ -239,3 +239,15 @@ L20Y只读探测job dlc16memtnoan9wo已Succeeded（0GPU、2CPU、8Gi、固定资
 尚未在L20Y执行全量转换或提交8卡GPU smoke；未commit/push，未启动正式训练。项目规则要求远端使用clean clone和已推送精确SHA，当前新增转换代码尚未发布，须在提交远端执行前解决发布授权。
 
 三份相关Python代码AST解析通过；未执行torch DataLoader验证（本地转换环境没有torch）。当前HEAD及远端frank/frank/eighteen-preparation均为500c0d3a8e502b653281a3f615009af7a1141d2f。拟提交范围仅scripts/prepare_realrobot.py、openwam/dataloader/realrobot.py、openwam/dataloader/registry.py及本任务记录，不包含已有其他dirty修改。远端发布后仍须完成全部582条转换、归一化与实际DataLoader回读、midtrain权重身份/可访问性核验，才提交8卡固定资源smoke。smoke通过也不得自动启动16卡正式训练。
+
+## 已授权发布及L20Y转换启动
+
+用户同意上述四文件提交推送，已发布cec1796e63008db7fb53ba31d1ab4b30312597d3，远端自己的clean clone已核验。数据管线四个依赖模块从已发布origin/main c5442a573e800b4f18afa723419238efb526032b导出，逐文件SHA保存dependency-receipt.json，不使用未推送依赖修改。
+
+CPU转换首次job dlc7nzevfgf1ufos仅在pip阶段失败，镜像PIP_CONSTRAINT固定numpy1.26.4与本地验证版本2.5.1冲突；专用隔离venv中解除该继承约束后，dlc1uhlc0bu2x3vw安装通过并开始转换（0GPU/8CPU/32Gi、固定资源、90分钟上限）。没有替换系统Torch。远端环境av19.0.1、mcap1.4.0、numpy2.5.1、pyarrow26.0.1、opencv-python-headless5.0.0.93。
+
+全量v1未发布，完成5条report后失败于NONINCREASING_SOURCE_TIMESTAMPS。定向复现：ordinal2左腕右目、ordinal3头部左目，解码结果各有一处约233ms的presentation时间倒序。修复仅对解码完成的图像按真实采集PTS排序，不重排压缩包、不改时间戳、不合并重复时间、不放宽同步容差；同时逐条记录所有转换异常，任何未解决异常均阻止发布。原始/失败产物保留。
+
+复用了本人CPU-only DSW dsw-4gpdclcrpjz496v51r（0GPU/8CPU/32Gi，固定资源），SSH实时核验120.77.254.228:1024，CPFS源正确。用于准备和接收最终midtrain，不是GPU训练。
+
+PPU只读核验job dlcrd6l1nfts76d3定位最终checkpoint_step_50101.safetensors，24813767464bytes，位于/mnt/workdir/frank/runs/openwam-alpha-ppu-midtrain-20261106/stereo-subset-stride08/2026-11-06_22-36-52。transfer job dlc1lc04y31dhyyf（0GPU）仅传最终权重、config.yaml及tokenizer到L20Y /mnt/workdir/frank/checkpoints/openwam-alpha-wan-midtrain-final-50101-20261109，逐文件源/目的SHA校验；不迁移optimizer或历史checkpoint。SSH采用已信任host key及本人既有PPU transfer-key，私钥不导出。传输完成待验收。
