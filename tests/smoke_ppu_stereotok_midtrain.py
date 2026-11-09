@@ -113,13 +113,23 @@ def main():
     assert not any(p.requires_grad for p in arch.video_backbone.text_encoder.parameters())
     if acc.is_main_process:
         state=arch.state_dict()
+        # Compare the actual native Wan load path as well as the source weights:
+        # the existing loader may cast stored tensors to the skeleton's dtype.
+        with torch.random.fork_rng(devices=[]):
+            _,wan_reference,_=build_architecture_from_ckpt_dir(
+                os.environ['MIDTRAIN_ALPHA_ROOT'],weights_required=True,override_cfg=baseline)
+        reference_state=wan_reference.state_dict()
         with safe_open(str(Path(os.environ['MIDTRAIN_ALPHA_ROOT'])/'checkpoint_step_154000.safetensors'),framework='pt',device='cpu') as source:
             expected=[k for k in source.keys() if not k.startswith('video_backbone.vae.')]
             actual=[k for k in state if not k.startswith('video_backbone.video_encoder.')]
             assert set(expected)==set(actual)
             for k in expected:
                 ref=source.get_tensor(k)
-                assert state[k].dtype==ref.dtype and torch.equal(state[k].cpu(),ref),k
+                assert state[k].dtype==reference_state[k].dtype and torch.equal(state[k],reference_state[k]),('wan_vs_stereotok',k)
+                assert torch.equal(state[k].cpu(),ref.to(state[k].dtype)),('source_after_native_cast',k)
+                if k=='action_backbone.action_decoder.bias':
+                    print('INIT_DTYPE',str(ref.dtype),str(state[k].dtype),'WAN_STEREOTOK_EXACT',flush=True)
+        del reference_state,wan_reference
         print('ALPHA_NONCODEC_TENSORS_EXACT',len(expected),flush=True)
         arch.save_assets_for_deployment(str(OUTPUT),cfg)
         copy_ckpt_artifacts(os.environ['MIDTRAIN_ALPHA_ROOT'],str(OUTPUT))
