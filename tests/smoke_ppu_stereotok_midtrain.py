@@ -171,6 +171,9 @@ def main():
         if micro==16:
             save_weights(acc,engine,str(OUTPUT),micro,final=False)
             save_full_state(acc,str(OUTPUT),micro,2,0)
+            # save_full_state publishes rank-0's completion marker after its
+            # final collective; wait before immediately reloading on all ranks.
+            acc.wait_for_everyone()
             load_full_state(acc,str(OUTPUT/'accel_state_step_16'))
             assert engine.global_steps==2
             print('FULL_STATE_RELOADED',acc.process_index,flush=True)
