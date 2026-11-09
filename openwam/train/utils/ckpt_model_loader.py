@@ -27,6 +27,7 @@ kept independent so training never imports deploy code.
 import logging
 import os
 import shutil
+import copy
 
 from omegaconf import DictConfig, OmegaConf, open_dict
 
@@ -252,7 +253,16 @@ def build_architecture_from_ckpt_dir(ckpt_dir: str, *, weights_required: bool, o
             "written by this trainer (its config.yaml carries the model section and the component specs)."
         )
     resolved_arch = resolve_architecture_config(model_cfg)
-    params = dict(resolved_arch.params)
+    params = copy.deepcopy(dict(resolved_arch.params))
+    replacement_encoder = None
+    if (weights_required and override_cfg is not None
+            and OmegaConf.select(model_cfg, 'video_backbone.encoder.name') == 'stereotok'
+            and OmegaConf.select(ckpt_cfg, 'model.video_backbone.encoder.name') != 'stereotok'):
+        if (OmegaConf.select(ckpt_cfg, 'model.video_backbone.encoder.name') not in (None, 'wan22_vae')
+                or OmegaConf.select(model_cfg, 'video_backbone.name') != 'wan22_ti2v_5b'
+                or OmegaConf.select(model_cfg, 'video_backbone.from_scratch', default=False)):
+            raise ValueError('StereoTok finetune swap requires native pretrained Wan22 TI2V')
+        replacement_encoder = OmegaConf.to_container(model_cfg.video_backbone.encoder, resolve=True)
 
     # Pin video_backbone params to a plain dict: OmegaConf would auto-promote
     # the ``_source`` assignment below into a DictConfig, and build_holder()
@@ -268,6 +278,11 @@ def build_architecture_from_ckpt_dir(ckpt_dir: str, *, weights_required: bool, o
     # video_backbone key (shift_video, from_scratch, ...) would reach the
     # architecture but not the backbone build that reads it back off ``_source``.
     vb_params["_source"] = OmegaConf.to_container(model_cfg.video_backbone, resolve=True)
+    if replacement_encoder is not None:
+        # Reconstruct and strict-load the complete native checkpoint first.
+        # Only the frozen codec is replaced after that load succeeds.
+        vb_params['encoder'] = None
+        vb_params['_source']['encoder'] = None
     vb_params["_ckpt_dir"] = ckpt_dir
     # Finetune loads safetensors a few lines below, so a backbone may leave an
     # empty shell for that load to fill. Resume must not: `load_state` runs only
@@ -286,8 +301,45 @@ def build_architecture_from_ckpt_dir(ckpt_dir: str, *, weights_required: bool, o
         # when logger output is drowned out; non-main ranks have print disabled.
         print(f"[{tag}] loading pretrained weights: {weights}", flush=True)
         architecture.load_checkpoint(weights)
+        if replacement_encoder is not None:
+            import torch
+            from openwam.model.video_backbone.encoder import build_video_encoder
+            # Frozen codec construction must not perturb the policy/data RNG stream.
+            with torch.random.fork_rng(devices=[]):
+                encoder = build_video_encoder(replacement_encoder)
+            _replace_native_wan_codec(architecture.video_backbone, encoder)
         print(f"[{tag}] pretrained weights loaded OK", flush=True)
     return resolved_arch, architecture, ckpt_cfg
+
+
+def _replace_native_wan_codec(backbone, encoder):
+    """Keep every loaded trainable tensor; only replace the compatible frozen codec."""
+    spec = encoder.properties
+    patch = tuple(spec.dit_patch_size)
+    if (spec.z_dim, spec.spatial_compression, spec.temporal_compression,
+            spec.causal_temporal, spec.pixel_decode, patch) != (48, 16, 4, True, True, (1, 2, 2)):
+        raise ValueError('StereoTok codec does not match the native Wan latent contract')
+    if backbone.video_encoder is not None or backbone.vae is None:
+        raise ValueError('Expected a strict-loaded native Wan codec before replacement')
+    dits = [d for d in (backbone.dit, getattr(backbone, 'dit2', None)) if d is not None]
+    if not dits:
+        raise ValueError('No initialized DiT for codec replacement')
+    for dit in dits:
+        if (tuple(dit.patch_size) != patch or dit.patch_embedding.in_channels != 48
+                or tuple(dit.patch_embedding.kernel_size) != patch
+                or tuple(dit.patch_embedding.stride) != patch
+                or tuple(dit.head.patch_size) != patch or dit.head.head.out_features != 192):
+            raise ValueError('Codec replacement would require changing pretrained DiT projections')
+    encoder.eval().requires_grad_(False)
+    backbone.video_encoder = encoder
+    backbone.vae = None
+    backbone._latent_spec = spec
+    backbone._dit_patch_size = patch
+    backbone._temporal_compression = 4
+    backbone._causal_temporal = True
+    backbone._height_division_factor = backbone._width_division_factor = 32
+    backbone._time_division_factor = 4
+    backbone._time_division_remainder = 1
 
 
 def propagate_component_specs(ckpt_cfg: DictConfig, cfg: DictConfig) -> None:

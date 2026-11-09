@@ -1,0 +1,25 @@
+defaults:
+  - midtrain_droid_abc_alpha_wan_ppu
+  - _self_
+
+model:
+  video_backbone:
+    encoder:
+      name: stereotok
+      model_path: ${oc.env:MIDTRAIN_STEREOTOK}
+      input_mode: stereo
+
+dataloader:
+  datasets:
+    droid:
+      input_mode: stereo
+    abc:
+      input_mode: stereo
+      right_video_root: ${oc.env:MIDTRAIN_ABC_RIGHT_ROOT}
+
+training:
+  output_path: ${oc.env:MIDTRAIN_STEREOTOK_OUTPUT}
+
+project:
+  wandb:
+    run_name: OpenWAM DROID+ABC Alpha StereoTok Stage3-u8000 stereo midtrain
