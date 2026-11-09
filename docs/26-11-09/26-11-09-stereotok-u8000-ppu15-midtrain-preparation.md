@@ -159,3 +159,21 @@ CPU预检dlc1jcekujid5mih完成DATA_PARITY_PASSED 32及CPU_PAIRED_DATA_PREFLIGHT
 对照已核对：DROID1667932+ABC1538510训练窗口，原索引/归一化不变；ABC全部episode元数据相同；32个实际train/val窗口左目像素/监督逐项相同；Alpha非codec1893张量实际Wan/StereoTok加载结果exact；配置差异白名单通过；StereoTok与T5冻结；3次更新loss有限；8 ranks恢复后继续第3次更新；独立部署2666张量exact。限制：图像/监督为覆盖式抽样而非全量视频解码；仅8卡单节点，没有执行32卡多节点collective验收；约13.41–14.69s/update仅两次smoke的第2步观测，不是稳定吞吐基准。第3步计时含完整保存/恢复，不用于训练ETA。
 
 已按用户要求停止。未提交正式32卡任务，正式起点仍Alpha154000，不能从smoke checkpoint或Wan50101继续。用户确认后正式32卡batch2×accum2/global128、LR1e-4/warmup500/cosine1e-6、25051更新等维持原配方；本次8卡smoke仅accum8保持global128。正式启动授权仍待用户确认。
+
+## 正式32卡固定资源提交（2026-11-09）
+
+用户明确确认启动PPU1.5固定资源32卡正式训练。实时RAM身份frank/205455090823393499，workspace308566，角色role-094ge5aotirttbix45；allowedRoles允许固定父池quotawsqknfajqjt（qiuzhi_wulanchabu_15），Ready/M890P。提交前API显示64GPU总量、16GPU allocated、6空节点；不是排队时长保证。优先级4未超过角色上限6。
+
+Job ID：dlcpo8hzfxyuv4n7；名称openwam-droid-abc-alpha-stereotok-stage3-u8000-stereo-midtrain；region cn-wulanchabu；4节点×8GPU，每节点192CPU/1600Gi/128Gi shared memory；ForbiddenQuotaOverSold（固定资源，不使用闲时），RDMA开启，最长4320分钟。沿用旧Wan已验证多节点torchrun节点rank/world配置及AIMaster最多3次重启。只从本次独立输出下的完整trainer_state.json恢复，不搜索旧Wan/smoke。
+
+生产OpenWAM SHA9b87cab7715c026cc5f4762dcb44fc9f95fcd094（本地HEAD58ef344仅追加验收文档）、FastWAM491e518fac6e04646ecfbd464027dd575ed99bde。远端源码/mnt/workdir/frank/projects/openwam-stereotok-stage3-u8000-20261109/{openwam,fastwam}；启动时强制clean及精确SHA，复核原production-ready数据/源文件哈希与smoke数据一致性、3次更新记录及独立重载通过回执。实际入口scripts/train.py --config-name=midtrain_droid_abc_alpha_stereotok_ppu，完整UserCommand在请求JSON。
+
+请求：C:/Users/Frank/AppData/Local/AliyunCLI/ppu-requests/openwam-alpha-midtrain-20261106/formal32-ppu15-stereotok-u8000-fixed-request.json，SHA256 da61227461b427857e8a699670a6a27be780918e977385e3f9c29d3d00adcf50；CLI dry-run通过，CreateJob返回Creating。未改生产代码/配方。
+
+输出根：/mnt/workdir/frank/runs/openwam-stereotok-stage3-u8000-ppu15-midtrain-20261109；节点日志launch-node-0.log至launch-node-3.log；训练器在根下生成时间戳运行目录，内含实际config/checkpoint/full-state等。W&B沿用用户此前明确授权offline（旧记录26-11-06-readiness亦保留授权），entity yichx14-uc-irvine/project StereoTok，新ID owma-stereotok-u8000-ppu32-1109，显示名OpenWAM DROID+ABC Alpha StereoTok Stage3-u8000 stereo midtrain；没有在线dashboard URL，不能把offline写成online。
+
+模型起点Alpha154000；冻结Stage3-u8000 codec/T5；数据DROID1667932+ABC1538510=3206442，左右输入，left与Wan一致；batch2×32×accum2=128；1epoch约25051updates/50101microsteps；LR1e-4、warmup500从1e-5、cosine到1e-6；验证每500updates每源128窗口；保存每5000microsteps=2500updates。固定资源选择不改变训练语义。
+
+其他人检查：aliyun.exe pai-dlc GetJob --profile h800 --region cn-wulanchabu --JobId dlcpo8hzfxyuv4n7；Pod日志用GetPodLogs --JobId同上 --PodId dlcpo8hzfxyuv4n7-master-0（worker pod实际名称以GetJob为准）。状态与首个实际更新需要区分；Creating/Queuing/Running均不单独证明训练进展。
+
+提交后一次健康检查：EnvPreparing，4个训练Pod均已分配到PPU1.5固定池同一hypernode的4个节点，master-0及worker-0/1/2均Initializing；API确认OversoldType=ForbiddenQuotaOverSold、4×8GPU、Priority4。尚无训练日志/首个loss，不能声称已开始optimizer更新。按长任务约定不持续轮询；启动后实际时间戳输出目录、W&B初始化显示名和首个训练指标仍待后续核查。
