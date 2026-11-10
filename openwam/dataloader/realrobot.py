@@ -48,6 +48,18 @@ def load_catalog(root):
         raise ValueError('Episode metadata totals mismatch')
     if [r['episode_index'] for r in rows] != list(range(len(rows))):
         raise ValueError('Noncontiguous episode identity')
+    for row in rows:
+        table = pq.read_table(data_path(root, row), columns=['synchronized', 'source_timestamp_ns'])
+        valid = np.asarray(table['synchronized'].to_pylist(), dtype=bool)
+        times = np.asarray(table['source_timestamp_ns'].to_pylist(), dtype=np.int64)
+        if len(valid) != row['length'] or not (np.diff(times) == 50_000_000).all():
+            raise ValueError('Invalid or compressed source timeline')
+        expected = [a for a in range(0, len(valid)-32, 2) if valid[max(0, a-1):a+33].all()]
+        if row['window_anchors'] != expected:
+            raise ValueError('Window index crosses invalid ticks or drops valid windows')
+    index_hash = hashlib.sha256(json.dumps([(r['source_ordinal'], r['window_anchors']) for r in rows]).encode()).hexdigest()
+    if info['ngad_extensions']['window_index_sha256'] != index_hash:
+        raise ValueError('Window index identity mismatch')
     return info, rows
 
 
@@ -67,7 +79,7 @@ def compute_stats(root, output):
         states = episode_states(data_path(root, row))
         if len(states) != row['length']:
             raise ValueError('State/metadata length mismatch')
-        for anchor in range(0, len(states)-32, 2):
+        for anchor in row['window_anchors']:
             state, action, valid = window_targets(states, anchor)
             for key, value in [('state', state), ('action', action[valid])]:
                 value = value.double()
@@ -131,9 +143,9 @@ class RealRobotDataset(BaseDataset):
             raise ValueError('Invalid normalization statistics')
         if any((self.stats[k] <= 0).any() for k in ('state_std','action_std')):
             raise ValueError('Nonpositive normalization standard deviation')
-        counts = [len(range(0, row['length']-32, 2)) for row in self.rows]
-        if any(n <= 0 for n in counts):
-            raise ValueError('Episode without complete RGB window')
+        counts = [len(row['window_anchors']) for row in self.rows]
+        if not sum(counts):
+            raise ValueError('Dataset without complete valid windows')
         self._cum_n_starts = np.cumsum([0, *counts])
         self._eps_df = pd.DataFrame({'episode_index': [r['episode_index'] for r in self.rows]})
         if len(self) != stats['window_count']:
@@ -147,7 +159,7 @@ class RealRobotDataset(BaseDataset):
             raise IndexError(index)
         episode = bisect_right(self._cum_n_starts, index)-1
         row = self.rows[episode]
-        anchor = int(index-self._cum_n_starts[episode])*2
+        anchor = row['window_anchors'][int(index-self._cum_n_starts[episode])]
         states = episode_states(data_path(self._dataset_dir, row))
         proprio, action, valid = window_targets(states, anchor)
         action = (action-self.stats['action_mean'])/self.stats['action_std']
@@ -181,6 +193,8 @@ if __name__ == '__main__':
     stats = compute_stats(args.dataset_dir, args.stats_path)
     dataset = RealRobotDataset(args.dataset_dir, args.stats_path, 'train')
     for start, end in zip(dataset._cum_n_starts[:-1], dataset._cum_n_starts[1:]):
+        if start == end:
+            continue
         for i in sorted({int(start), int((start+end-1)//2), int(end-1)}):
             sample = dataset[i]
             if sample['action'].shape != (34,80) or sample['proprio'].shape != (1,80) or len(sample['video']) != 17:

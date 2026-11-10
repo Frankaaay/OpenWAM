@@ -171,12 +171,12 @@ def convert(args):
     if not len(good):
         raise ValueError('No synchronized interval: ' + str(source))
     first, last = int(good[0]), int(good[-1])+1
-    if not valid[first:last].all():
-        raise ValueError('Interior synchronization gap: ' + str(source))
     if last-first < 34:
         raise ValueError('Fewer than 34 synchronized samples after boundary crop')
     boundary_crop = dict(leading_frames=first, trailing_frames=len(grid)-last)
     grid = grid[first:last]
+    valid = valid[first:last]
+    anchors = [a for a in range(0, len(grid)-32, 2) if valid[max(0, a-1):a+33].all()]
     indices = {k: v[first:last] for k,v in indices.items()}
     alignment = {k: v[first:last] for k,v in alignment.items()}
     states, poses = [], []
@@ -195,6 +195,7 @@ def convert(args):
     state = np.concatenate(states, axis=1).astype(np.float32)
     data = pa.table({'frame_index': np.arange(n, dtype=np.int64), 'timestamp': np.arange(n) / FPS,
                      'source_timestamp_ns': grid,
+                     'synchronized': valid,
                      'observation.state': pa.array(state.tolist(), type=pa.list_(pa.float32(), 20)),
                      'observation.source_pose': pa.array(np.concatenate(poses, axis=1).tolist(), type=pa.list_(pa.float64(), 14))})
     work = Path(audit) / f'episode-{episode:03d}'
@@ -226,13 +227,14 @@ def convert(args):
             if len(actual) != n or any(w != 256 or h != 256 or abs(t - i / FPS) > 1e-5 for i, (w, h, t) in enumerate(actual)):
                 raise ValueError('Video timestamp/frame readback mismatch')
         video_paths[camera] = str(path.relative_to(root)).replace('\\', '/')
-    np.savez_compressed(work / 'alignment.npz', target_ns=grid, **alignment)
+    np.savez_compressed(work / 'alignment.npz', target_ns=grid, synchronized=valid, **alignment)
     result = dict(row, length=n, source_sha256=sha(source), state_path=str(data_path),
                   videos=video_paths, frame_ids={k: next(iter(v)) for k, v in frame_ids.items()},
                   geometry=geometry, initial_decode_errors=decode_errors, boundary_crop=boundary_crop,
                   presentation_reorders=presentation_reorders,
                   alignment_error_ns={k: int(abs(v-grid).max()) for k, v in alignment.items()},
-                  full_window_count=len(range(0, n-32, 2)), seconds=time.monotonic()-started)
+                  window_anchors=anchors, invalid_ticks=int((~valid).sum()),
+                  full_window_count=len(anchors), seconds=time.monotonic()-started)
     save(work / 'report.json', result)
     return result
 
@@ -258,6 +260,7 @@ def publish(records, root):
         row = dict(episode_index=eid, length=n, dataset_from_index=offset, dataset_to_index=offset+n,
                    tasks=[r['task_text']], source_ordinal=r['ordinal'], source_sha256=r['source_sha256'],
                    source_file=r['source_file'], **{'data/chunk_index': 0, 'data/file_index': eid})
+        row['window_anchors'] = r['window_anchors']
         for camera in CAMERAS:
             key = 'videos/observation.images.cam_' + camera
             row.update({key+'/chunk_index': 0, key+'/file_index': r['ordinal'],
@@ -269,7 +272,8 @@ def publish(records, root):
     pq.write_table(pa.Table.from_pylist(episodes), path)
     pq.write_table(pa.table({'task_index': range(len(tasks)), 'task': tasks}), root/'meta/tasks.parquet')
     features = {key: dict(dtype='int64', shape=[1]) for key in ('index','episode_index','frame_index','task_index')}
-    features.update({'timestamp': dict(dtype='float64', shape=[1]), 'observation.state': dict(dtype='float32', shape=[20])})
+    features.update({'timestamp': dict(dtype='float64', shape=[1]), 'observation.state': dict(dtype='float32', shape=[20]),
+                     'synchronized': dict(dtype='bool', shape=[1])})
     features.update({'observation.images.cam_'+c: dict(dtype='video', shape=[256,256,3], video_info={'video.fps': FPS, 'video.codec': 'h264'}) for c in CAMERAS})
     save(root/'meta/info.json', dict(codebase_version='v3.0', robot_type='cart-007-recorded-pose', fps=FPS,
          total_episodes=len(records), total_frames=offset, total_tasks=len(tasks), total_videos=6*len(records), chunks_size=1000,
@@ -277,7 +281,9 @@ def publish(records, root):
          video_path='videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4', features=features,
          ngad_extensions=dict(schema='cart007.recorded_pose.raw_gripper.v1', pose_source='pose_state',
               gripper='raw recorded position; no endpoint calibration or clipping', rot6d='first_two_rows_row_major',
-              tcp='recorded source reference, physical offset unspecified', fk_applied=False, training_loader_verified=False)))
+              tcp='recorded source reference, physical offset unspecified', fk_applied=False, training_loader_verified=False,
+              window_policy='continuous_valid_anchor_minus_1_through_plus_32_v1',
+              window_index_sha256=hashlib.sha256(json.dumps([(r['ordinal'], r['window_anchors']) for r in records]).encode()).hexdigest())))
     save(root/'meta/source_manifest.json', records)
 
 
@@ -317,7 +323,8 @@ def main():
         raise RuntimeError(f'{len(errors)} recordings failed; no dataset published; see conversion_result.json')
     publish(records, args.output)
     save(Path(args.audit)/'conversion_result.json', dict(episodes=len(records), frames=sum(r['length'] for r in records),
-         windows=sum(r['full_window_count'] for r in records), video_readback_verified=True, training_loader_verified=False))
+         windows=sum(r['full_window_count'] for r in records), zero_window_ordinals=[r['ordinal'] for r in records if not r['full_window_count']],
+         video_readback_verified=True, training_loader_verified=False))
 
 
 if __name__ == '__main__':
