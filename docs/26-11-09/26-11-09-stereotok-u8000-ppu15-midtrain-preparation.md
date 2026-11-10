@@ -177,3 +177,27 @@ Job ID：dlcpo8hzfxyuv4n7；名称openwam-droid-abc-alpha-stereotok-stage3-u8000
 其他人检查：aliyun.exe pai-dlc GetJob --profile h800 --region cn-wulanchabu --JobId dlcpo8hzfxyuv4n7；Pod日志用GetPodLogs --JobId同上 --PodId dlcpo8hzfxyuv4n7-master-0（worker pod实际名称以GetJob为准）。状态与首个实际更新需要区分；Creating/Queuing/Running均不单独证明训练进展。
 
 提交后一次健康检查：EnvPreparing，4个训练Pod均已分配到PPU1.5固定池同一hypernode的4个节点，master-0及worker-0/1/2均Initializing；API确认OversoldType=ForbiddenQuotaOverSold、4×8GPU、Priority4。尚无训练日志/首个loss，不能声称已开始optimizer更新。按长任务约定不持续轮询；启动后实际时间戳输出目录、W&B初始化显示名和首个训练指标仍待后续核查。
+
+## 2026-11-10 只读状态核查：正式训练未启动
+
+用户请求状态、ETA和与Wan的loss曲线对比。GetJob实时返回dlcpo8hzfxyuv4n7 Failed，JobRestartCount=0；完成时间2026-11-09T11:45:45Z（北京时间19:45:45）。四个训练Pod均在启动前Python检查中报AssertionError: openwam/dataloader/orion_midtrain_ppu.py，未到torchrun/model初始化，因此正式optimizer updates=0，无正式StereoTok loss、无当前运行ETA。
+
+根因是本次请求继承原Wan production-ready.json的source_files哈希，并从新的StereoTok源码cwd解析相对路径；已审核且必要的双目reader改动因此与旧Wan哈希不相等。属于提交入口错误，不是数据损坏/模型发散。正确修复应将旧Wan源码校验明确定位到原基线路径，新StereoTok源码由精确发布SHA+clean检查保证；保留数据哈希验证。此轮只核查，不修改提交请求、不重启/重提任务。
+
+已有Wan图ppu32-loss-log-20261107.png来自26918microsteps/13459updates的历史快照，非最终完整曲线。StereoTok的3步smoke不能冒充正式训练curve，也不与Wan正式曲线混画。正式对比当前无法生成；后续修复启动并产生指标后才能同optimizer-update横轴比较。Video latent监督由不同codec定义，video loss绝对值不宜直接当质量排序。
+
+## 2026-11-10 授权修复重启
+
+用户明确要求修复重启并确认真实运行。仅修复DLC UserCommand中production-ready.json相对路径的解析：旧receipt中相对路径仍从原Wan /mnt/workdir/frank/projects/openwam-alpha-ppu-midtrain-20261106/source 解析，绝对路径保持原样。新StereoTok代码仍由clean+精确SHA9b87cab/FastWAM491e518保证；数据哈希、模型、配方、global128、输出目录与W&B ID均保留。不重写原receipt、不放宽hash比较、不修改训练代码。
+
+原dlcpo8hzfxyuv4n7已确认Failed才重提；新Job dlcuv0mq3z1y84su，PPU1.5固定quotawsqknfajqjt/ForbiddenQuotaOverSold/4×8卡，priority4。提交前固定池Ready，总64卡、allocated16卡。请求formal32-ppu15-stereotok-u8000-fixed-r2-request.json，SHA256d88e0954aa839fcb0af5cf993a6daef600f58285d1cc5c76ad0378af32c922b0。第一次状态EnvPreparing；本轮按用户要求跟踪到真实训练指标，不以Running作为通过。
+
+新任务实况：4节点通过启动；Alpha154000加载成功，输出实际目录2026-11-10_08-31-25，W&B offline目录offline-run-20261110_083144-owma-stereotok-u8000-ppu32-1109，显示名配置正确。初始保存后出现NCCL RAS polling/timeout告警（seq7），因此未直接报健康；CPU只读dlc1g886bvyl9bf6确认32份optim shards、random_states_0..31、trainer_state.json={global_step:0,opt_step:0,epoch:0}完整，validation尚未写出。随后原GPU任务于08:37:05继续出现各rank Inductor编译日志，证明等待已推进；未擅自改NCCL配置或重启。初始告警不能据此断言永久通信故障。继续等待真实optimizer更新。
+
+### 修复后健康验收通过（2026-11-10 08:50 CST）
+
+dlcuv0mq3z1y84su实际推进95/50101microsteps（至少47 optimizer updates），四训练Pod Running，JobRestartCount=0。最新终端loss total0.5373/video0.1129/action0.4244，LR1.86e-5，非仅Running状态。CPU只读dlc17cpdsb5zydm1解析持久W&B快照72条训练记录：total/action/video/grad_norm各自nonfinite=0、扫描无尾部错误，实际run.display_name=OpenWAM DROID+ABC Alpha StereoTok Stage3-u8000 stereo midtrain、run_id=owma-stereotok-u8000-ppu32-1109。第72microstep total0.5692877/video0.0980901/action0.4711976，grad_norm4.2026973，LR1.648e-5。累积中间步记录grad_norm=0是日志行为，不是零梯度断言。
+
+起始验证完整256窗口（DROID128+ABC128）：combined total2.6489921/action2.2943506/video0.3546415；DROID total2.9256488；ABC total2.3723355。step0完整保存已有32optimizer+32RNG+trainer_state marker。NCCL RAS告警后任务自行推进到编译、验证和多次更新，未修改通信设置、未再次重启，故不认定为持续通信故障。
+
+最近观察速度约1.2–1.7s/microstep，纯训练剩余粗估17–24小时，尚为早期估计，未含后续验证/保存耗时；首次准备/保存/验证/编译约16分钟不用于稳态速度。正式运行目录/mnt/workdir/frank/runs/openwam-stereotok-stage3-u8000-ppu15-midtrain-20261109/2026-11-10_08-31-25，节点日志在其父目录launch-node-{0..3}.log，validation.jsonl及checkpoint/full-state在该运行目录，offline W&B在父目录wandb/offline-run-20261110_083144-owma-stereotok-u8000-ppu32-1109。用户要求的修复重启+实际健康检查完成，训练继续，不再循环监控。
