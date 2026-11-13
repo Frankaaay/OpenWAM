@@ -1,0 +1,19 @@
+# Use the SAME file on server and robot client. The robot's existing ORION
+# deployment YAML supplies robot IPs, left-eye devices, servo/interpolation limits.
+task: cup_stacking
+input_mode: mono-left  # stereo requires real right cameras at all three mounts
+inference:
+  denoise_steps: 10
+  actions_per_chunk: 4
+  max_translation: 0.08  # meters from each arm's observation anchor
+  max_rotation: 0.5     # radians from observation anchor
+  max_skew_s: 0.035     # host acquisition timestamps; not exposure-sync certification
+client:
+  right_camera_devices: null  # stereo: [head-right, left-wrist-right, right-wrist-right]
+  interfaces_verified: false  # only true after recorded-pose/SDK and image parity checks
+  raw_gripper_limits: [[0.0, 1.0], [0.0, 1.0]]  # provisional SDK bounds: verify on site
+  max_steps: 20
+  max_round_trip_s: 0.5  # warm-up excluded; measure before changing
+  max_observation_age_s: 0.1
+  max_anchor_translation: 0.005
+  max_anchor_rotation: 0.05
