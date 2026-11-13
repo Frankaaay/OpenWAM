@@ -31,6 +31,7 @@ def main():
     parser.add_argument("--output", type=pathlib.Path, required=True)
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--preflight", action="store_true")
+    parser.add_argument("--auto-resume", action="store_true")
     args = parser.parse_args()
     model = args.model
     task = args.task
@@ -41,7 +42,13 @@ def main():
     stats = PREP / f"{task}-stats.json"
     ckpt = args.checkpoint.resolve()
     assert ckpt.name == "checkpoint_step_50101.safetensors" and ckpt.is_file()
-    assert not base.exists(), "Use a new output directory"
+    assert args.auto_resume or not base.exists(), "Use a new output directory"
+    assert not (smoke and args.auto_resume), "Auto resume is for full-state formal training"
+    if args.auto_resume and (base / "result.json").exists():
+        result = json.loads((base / "result.json").read_text())
+        assert result["status"] == "complete" and result["model"] == model and result["task"] == task
+        print("ALREADY_COMPLETE", json.dumps(result), flush=True)
+        return
     assert json.load(open(PREP / "result.json"))["status"] == "passed"
     # The encoder is restored from the self-contained checkpoint. This variable
     # only resolves the archived config before the live model_path=None override.
@@ -49,7 +56,7 @@ def main():
         MIDTRAIN_ALPHA_ROOT=str(ckpt),
         MIDTRAIN_OUTPUT=str(base),
         MIDTRAIN_STEREOTOK=str(ckpt),
-        WANDB_MODE="disabled" if smoke else "online",
+        WANDB_MODE="disabled" if smoke else "offline",
         TOKENIZERS_PARALLELISM="false",
     )
     real = V3Dataset(task, data, PREP, "stereo" if model == "stereo" else "mono-left")
@@ -71,7 +78,7 @@ def main():
                 "training.offload_optimizer_device=none",
                 "training.save_full_states_for_resume=true",
                 f"training.save_steps={per_epoch}",
-                "training.keep_last_k_ckpts=10",
+                "training.keep_last_k_ckpts=11",
                 "training.learning_rate=3e-5",
                 "training.action_lr=3e-5",
                 "training.video_lr=3e-5",
@@ -121,7 +128,7 @@ def main():
         saved_steps=sorted(save_at),
         final_retained_steps=sorted(retained_at),
         full_state=not smoke,
-        wandb_mode="disabled" if smoke else "online",
+        wandb_mode="disabled" if smoke else "offline",
         independent_init=str(ckpt),
         stats_sha256=hashlib.sha256(stats.read_bytes()).hexdigest(),
         info_sha256=hashlib.sha256((data / "meta/info.json").read_bytes()).hexdigest(),
@@ -130,6 +137,18 @@ def main():
         persistent_workers=True,
         zero_stage=2,
     )
+    if args.auto_resume and (base / "active-output.json").exists():
+        from openwam.train.utils.checkpointing import find_latest_accel_state
+
+        previous = pathlib.Path(json.loads((base / "active-output.json").read_text())["output"])
+        assert previous.resolve().is_relative_to(base.resolve())
+        assert json.loads((previous / "data-contract.json").read_text()) == contract
+        if find_latest_accel_state(str(previous)) is not None:
+            cfg.training.finetune_ckpt_path = None
+            cfg.training.resume_ckpt_path = str(previous)
+            print("AUTO_RESUME", str(previous), flush=True)
+        else:
+            print("RESTART_BEFORE_FIRST_COMPLETE_STATE", str(previous), flush=True)
     OmegaConf.to_container(cfg, resolve=True)
     if args.preflight:
         print("FORMAL_CPU_PREFLIGHT", json.dumps(contract), flush=True)
@@ -145,12 +164,10 @@ def main():
     def weights(a, architecture, output, step, *, final):
         if step not in save_at:
             return
-        if (pathlib.Path(output) / f"checkpoint_step_{step}.safetensors").exists():
-            return
         original_weights(a, architecture, output, step, final=final)
 
     def state(a, output, step, opt_step, epoch):
-        if step in save_at:
+        if step in save_at or (not smoke and step == 0):
             original_state(a, output, step, opt_step, epoch)
 
     tm.save_weights = weights
@@ -198,9 +215,17 @@ def main():
                     shutil.copyfile(stats, pathlib.Path(out) / "realrobot_stats.json")
                     (pathlib.Path(out) / "data-contract.json").write_text(json.dumps(contract, indent=2))
                     shutil.copyfile(__file__, pathlib.Path(out) / "training-entrypoint.py")
-                (base / "active-output.json").write_text(json.dumps(dict(output=out, task=task)))
+                active = base / "active-output.json"
+                pending = active.with_suffix(".tmp")
+                pending.write_text(json.dumps(dict(output=out, task=task)))
+                pending.replace(active)
             self.accelerator.wait_for_everyone()
             return out, res
+
+        def resume_if_configured(self, resume_state_dir, dataloader, grad_accum):
+            position = super().resume_if_configured(resume_state_dir, dataloader, grad_accum)
+            self.last_opt_step = position[1]
+            return position
 
         def prepare_accelerate(self, optimizer, dataloader, scheduler):
             result = super().prepare_accelerate(optimizer, dataloader, scheduler)
@@ -215,7 +240,7 @@ def main():
 
         def log_step(self, **kw):
             if not smoke and self.accelerator.is_main_process:
-                assert kw["wandb_run"] is not None and kw["wandb_run"].settings.mode == "online"
+                assert kw["wandb_run"] is not None and kw["wandb_run"].settings.mode == "offline"
             super().log_step(**kw)
             if self.accelerator.is_main_process:
                 self.last_opt_step = kw["opt_step"]
@@ -252,7 +277,9 @@ def main():
             optimizer_steps=10 if smoke else per_epoch * 10,
             smoke=smoke,
         )
-        (base / "result.json").write_text(json.dumps(result, indent=2))
+        pending = base / "result.json.tmp"
+        pending.write_text(json.dumps(result, indent=2))
+        pending.replace(base / "result.json")
         print("TASK_TRAINING_COMPLETE", json.dumps(result), flush=True)
     acc.wait_for_everyone()
     acc.end_training()
