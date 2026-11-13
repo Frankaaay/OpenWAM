@@ -2,6 +2,13 @@
 
 ## P7 二代臂适配（当前部署入口）
 
+后续用户要求补齐环境安装列表：README Installation新增P7双端环境清单、X5通用依赖安装、
+SDK/CORA现场包安装条件和无运动导入检查、GPU依赖与导入检查。依据Kevin精确SHA的
+p7/client.py、p7/deployment_config.yaml、pyproject.toml及airbot-deployment-sop.md核对：
+其SOP仍是一代臂，pyproject只有airbot-py，没有P7 SDK/CORA版本或安装包地址；明确记录该缺口，
+未编造PyPI包、下载地址或SDK版本。未修改模型依赖或现场环境；文档代码块做语法检查，
+真实SDK/CORA导入检查需在X5执行，不报告为本机已通过。
+
 用户明确改为二代P7，并授权修改后push。目标仍为OpenWAM的frank/realrobot-v3-inference，
 修改基线bece4d14e9def732ad65f5e5e391e37edee81da0；fetch origin/frank和fast-forward检查完成。
 只读参考Kevin分支kevin/p7-deploy-261029，实时SHA为06ebf02d1d7806c5b20c03bcfbc682bd61446103。

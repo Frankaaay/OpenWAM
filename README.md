@@ -22,7 +22,7 @@ P7 客户端适配通过 20 项 CPU 合同/模拟 SDK 测试，尚待现场验�
 
 ### 1. 准备代码、环境和资产
 
-在 GPU 机器使用本分支 OpenWAM 和已配置的 CUDA/PyTorch 环境（安装方法见下方 Installation），以及以下版本的依赖源码：
+先按下方 [P7 真机部署环境安装](#p7-真机部署环境安装) 分别准备 X5 客户端和 GPU 服务端环境，再准备以下版本的依赖源码：
 
 - orion-0：Kevin 的 `kevin/p7-deploy-261029` 分支，固定 `06ebf02d1d7806c5b20c03bcfbc682bd61446103`。客户端复用 `src/wam/deployment/p7/`，不是一代臂的 `airbot_py` 客户端。
 - FastWAM：`491e518fac6e04646ecfbd464027dd575ed99bde`，Stereo 必需。
@@ -223,6 +223,85 @@ All architectures are selected via `configs/model/<framework>.yaml` with `archit
 - **[2026/09/06]** 🔥 OpenWAM Codebase Release！
 
 ## Installation
+
+### P7 真机部署环境安装
+
+P7 部署使用两个环境。X5 仅采集状态/图像并发送动作，CUDA 模型在 GPU 主机运行。
+
+| 位置 | 必需环境/依赖 | 来源或说明 |
+|---|---|---|
+| X5 真机端 | Python >=3.10，NumPy、PyYAML、Pillow、OpenCV | Python 的实际版本须匹配现场 SDK/CORA 的 wheel；优先复用已验证的 X5 venv |
+| X5 真机端 | `arm_p7_sdk` | Kevin P7 客户端使用的 SDK，需匹配现场 `arm_app`；不是 `airbot-py` |
+| X5 真机端 | `cora`，含 `QoSConfig`、`sensor_msgs.ImageReader` | 现场 CORA DDS Python 绑定及其原生运行库；不是任意同名 PyPI 包 |
+| X5 系统服务 | 双臂 `arm_app`、发布六目话题的 `robot_app` | Kevin 配置记录了 `start_x5_arm_remote.sh all` 和 `robot_app 1.4.36` 的相机话题；启动脚本路径使用现场实际位置 |
+| GPU 服务端 | Linux、NVIDIA GPU/驱动、CUDA 兼容 PyTorch、OpenWAM 依赖 | 已测 Python 3.12、PyTorch 2.7.1+cu128；依赖列表见 `pyproject.toml` |
+| 两端代码 | 固定版本的 ORION 部署源码 | `06ebf02d1d7806c5b20c03bcfbc682bd61446103`，通过 `PYTHONPATH` 引用 |
+| Stereo GPU 服务端 | 固定版本的 FastWAM 源码 | `491e518fac6e04646ecfbd464027dd575ed99bde`，通过 `PYTHONPATH` 引用 |
+
+Kevin 分支的 `p7/client.py` 明确要求 `arm_p7_sdk`、`cora`、OpenCV，但该分支 `pyproject.toml`/`uv.lock` 仍安装一代臂 `airbot-py`，**没有提供 P7 SDK/CORA 的锁定版本、wheel 或下载地址**。因此在 ORION 仓库执行 `uv sync` 不会自动得到完整 P7 环境，也不要把它的整套模型依赖安装进 OpenWAM 环境。
+
+**X5：复用现场 P7 环境，补装通用客户端依赖。** 以下路径替换为现场值；已能导入的 SDK/CORA 不重装。
+
+```bash
+source /absolute/path/to/existing-p7-venv/bin/activate
+export OPENWAM=/absolute/path/to/OpenWAM
+export ORION=/absolute/path/to/orion-0
+export PYTHONPATH="$ORION/src${PYTHONPATH:+:$PYTHONPATH}"
+
+python -m pip install 'numpy>=1.24,<3' 'PyYAML>=6,<7' 'Pillow>=10,<13'
+# 若当前环境不能 import cv2，再安装；不要叠装已有的 OpenCV/headless/系统版本。
+python -c 'import cv2' || python -m pip install 'opencv-python==4.11.0.86'
+```
+
+OpenCV 版本取自 Kevin 分支依赖清单；若现场已经有能正常读取 CORA 图像的 OpenCV，可保留。X5 不需要 Torch、CUDA、DeepSpeed、FastWAM，也不需要执行 `pip install -e .` 安装整个 OpenWAM。
+
+如果新建 X5 环境，须先取得与 X5 架构、Python ABI 和服务版本匹配的 **P7 SDK 与 CORA 官方/现场安装包**，并按其发行说明配置原生库。仅当拿到的是 wheel 时，可在目标环境执行：
+
+```bash
+export P7_SDK_WHEEL=/absolute/path/to/matching-p7-sdk.whl
+export CORA_WHEEL=/absolute/path/to/matching-cora.whl
+python -m pip install "$P7_SDK_WHEEL" "$CORA_WHEEL"
+```
+
+仓库没有这些二进制包；不要直接用未经核实的 `pip install cora` 代替现场 DDS 绑定。
+
+**X5 无运动导入自检**（不连接机械臂，不初始化 DDS）：
+
+```bash
+python - <<'PY'
+import sys
+import numpy, yaml, PIL, cv2, cora, arm_p7_sdk
+from arm_p7_sdk import (
+    AirbotClient, CartesianMoveOptions, CartesianPose, Controller,
+    EEFControlMode, EEFMoveOptions, JointMoveOptions,
+)
+from cora import QoSConfig
+from cora.msg import sensor_msgs
+from wam.deployment.p7.client import P7System, load_deployment_config
+assert callable(sensor_msgs.ImageReader)
+assert callable(QoSConfig.reliable)
+print("Python:", sys.executable, sys.version)
+print("P7 SDK:", arm_p7_sdk.__file__)
+print("CORA:", cora.__file__)
+print("OpenCV:", cv2.__version__)
+print("P7 imports OK; no hardware connected")
+PY
+python "$OPENWAM/scripts/realrobot_v3_client.py" --help
+```
+
+**GPU 服务端：** 按下方 Native Python environment 或 Docker 路线安装本仓库依赖，建议与已测环境一致使用 Python 3.12、PyTorch 2.7.1+cu128。OpenWAM 列表已包含 SciPy、Pillow、PyYAML、`ftfy`、SentencePiece、Transformers、safetensors、timm 等模型组件依赖。这里只引用 ORION 的通信模块；无需安装 `arm_p7_sdk`、CORA 或一代臂 SDK。Stereo 通过 `PYTHONPATH` 引用固定 FastWAM 源码，不整套安装 FastWAM 的训练依赖，以免替换 OpenWAM 的依赖版本。
+
+```bash
+export PYTHONPATH="$OPENWAM:$ORION/src:$FASTWAM/src${PYTHONPATH:+:$PYTHONPATH}"
+python -c 'import torch, ftfy, scipy, sentencepiece; from wam.deployment.airbot.policy_protocol import PolicyServer; assert torch.cuda.is_available(); print(torch.__version__, torch.cuda.get_device_name())'
+# Stereo 额外检查；Wan 可跳过。
+python -c 'from fastwam.models.wan22.stereotok.student import MetricHead, LAS2GuidedFusion; print("StereoTok imports OK")'
+python -m openwam.deploy.realrobot_v3 --help
+```
+
+以上导入检查不替代加载真实 checkpoint，也不验证 arm_app/CORA 网络连通性。完成后按前面的部署步骤做默认不运动检查。已测峰值显存 Wan 约 23.4 GiB、Stereo 约 37.2 GiB，不保证笔记本 GPU 可容纳。
+
+### General installation routes
 
 Choose one installation route:
 
