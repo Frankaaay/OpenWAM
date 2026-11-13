@@ -169,7 +169,7 @@ def test_client_check_only_never_enables_or_sends(monkeypatch):
     calls = []
 
     class Robot:
-        def __init__(self, config):
+        def __init__(self, config, right_topics):
             calls.append("connect")
 
         def observation(self, prompt):
@@ -180,6 +180,9 @@ def test_client_check_only_never_enables_or_sends(monkeypatch):
 
         def close(self):
             calls.append("disconnect")
+
+        def stop_motion(self):
+            calls.append("stop")
 
         def reset(self, *args):
             pytest.fail("check-only must not reset")
@@ -203,16 +206,17 @@ def test_client_check_only_never_enables_or_sends(monkeypatch):
             calls.append("policy_close")
 
     from dataclasses import make_dataclass
-    fields = dict(action_space="tcp", control_hz=20, async_inference=False, policy_host="localhost", policy_port=8000,
+    fields = dict(action_space="tcp", arms="both", ttrtc=None, camera_topics=("head", "left", "right"),
+                  control_hz=20, async_inference=False, policy_host="localhost", policy_port=8000,
                   check_only=False, skip_reset=False, gripper_binary_enabled=True, prompt="unused")
     config = make_dataclass("Config", [(key, type(value)) for key, value in fields.items()])(**fields)
-    monkeypatch.setattr(client, "AirbotSystem", Robot)
+    monkeypatch.setattr(client, "V3P7System", Robot)
     monkeypatch.setattr(client, "PolicyClient", Policy)
     client.run(settings, config)
-    assert calls == ["connect", "policy_close", "disconnect"]
+    assert calls == ["connect", "policy_close", "stop", "disconnect"]
     with pytest.raises(ValueError, match="Verify"):
         client.run(settings, config, enable_motion=True)
-    assert calls == ["connect", "policy_close", "disconnect"]  # gate before connecting
+    assert calls == ["connect", "policy_close", "stop", "disconnect"]  # gate before connecting
 
 
 def test_client_rejects_wrong_reply_and_does_not_clip_gripper():
@@ -253,3 +257,160 @@ def test_existing_orion_transport_round_trip():
         server.server_close()
         thread.join(timeout=2)
     assert not thread.is_alive()
+
+
+def test_p7_feedback_and_send_preserve_tcp_and_convert_gripper_once():
+    import yaml
+    client = load_file("v3_p7_units", ROOT / "scripts/realrobot_v3_client.py")
+    settings = yaml.safe_load((ROOT / "configs/realrobot_v3_inference.yaml").read_text())
+    targets = pose().reshape(2, 8)
+    sent = []
+
+    class Arm:
+        def __init__(self, index):
+            self.index = index
+
+        def get_end_pose(self):
+            return SimpleNamespace(position=targets[self.index, :3], orientation=targets[self.index, 3:7])
+
+        def get_eef_joint_state(self):
+            return SimpleNamespace(eef_pos=[float(targets[self.index, 7]) * 1000])
+
+        def move_end_pose(self, value, options, **kwargs):
+            sent.append((self.index, "pose", value))
+            return True
+
+        def move_eef(self, value, options, **kwargs):
+            sent.append((self.index, "gripper_mm", value))
+            return True
+
+    robot = client.P7System.__new__(client.P7System)
+    robot._arms = [Arm(0), Arm(1)]
+    robot._active = (True, True)
+    robot._action_space = "tcp"
+    robot._pose = SimpleNamespace
+    robot._servo_pose = robot._eef_async = None
+    robot._gripper_mm = [None, None]
+    measured = client.check_anchor(robot, observation(), settings)
+    np.testing.assert_allclose(measured, pose())
+    robot.send(measured)
+    for index in range(2):
+        np.testing.assert_allclose(sent[2 * index][2].position, targets[index, :3])
+        np.testing.assert_allclose(sent[2 * index][2].orientation, targets[index, 3:7])
+        np.testing.assert_allclose(sent[2 * index + 1][2], [targets[index, 7] * 1000])
+    shifted = observation()
+    shifted["observation/cartesian_state"][0] += 0.02
+    with pytest.raises(ValueError, match="anchor"):
+        client.check_anchor(robot, shifted, settings)
+
+
+@pytest.mark.parametrize("stereo", [False, True])
+def test_p7_cora_camera_mapping_resize_and_timestamps(monkeypatch, stereo):
+    client = load_file("v3_p7_cameras", ROOT / "scripts/realrobot_v3_client.py")
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    frame[:240, :320, 0] = 255
+    obs = observation()
+    for index, name in enumerate(v3.CAMERAS):
+        obs["observation/" + name] = frame + index
+    monkeypatch.setattr(client.P7System, "observation", lambda self, prompt: obs.copy())
+    robot = client.V3P7System.__new__(client.V3P7System)
+    robot._right_readers = ([SimpleNamespace(latest=lambda i=i: (frame + i + 10, 100.01 + i * 0.001))
+                             for i in range(3)] if stereo else [])
+    actual = robot.observation("test")
+    for i, name in enumerate(v3.CAMERAS):
+        expected = Image.fromarray(frame + i).resize((256, 192), Image.Resampling.BILINEAR)
+        np.testing.assert_array_equal(actual["observation/" + name], expected)
+        if stereo:
+            expected_right = Image.fromarray(frame + i + 10).resize((256, 192), Image.Resampling.BILINEAR)
+            np.testing.assert_array_equal(actual["observation/right/" + name], expected_right)
+    np.testing.assert_allclose(actual["observation/camera_timestamps"],
+                               [100, 100, 100, 100.01, 100.011, 100.012] if stereo else [100, 100, 100])
+    obs["observation/base_0_rgb"] = np.zeros((352, 640, 3), np.uint8)
+    with pytest.raises(ValueError, match="4:3"):
+        robot.observation("test")
+
+
+def test_p7_config_rejects_single_arm_and_overwide_grippers():
+    from dataclasses import replace
+    import yaml
+    from wam.deployment.p7.client import DEFAULT_DEPLOYMENT_CONFIG
+    client = load_file("v3_p7_config", ROOT / "scripts/realrobot_v3_client.py")
+    settings = yaml.safe_load((ROOT / "configs/realrobot_v3_inference.yaml").read_text())
+    config = client.load_deployment_config(DEFAULT_DEPLOYMENT_CONFIG)
+    with pytest.raises(ValueError, match="arms: both"):
+        client.run(settings, replace(config, arms="right"))
+    with pytest.raises(ValueError, match="distinct"):
+        client.run(settings, replace(config, arms="both", camera_topics=("same",) * 3))
+    settings["client"]["raw_gripper_limits"][0][1] = 1.0
+    with pytest.raises(ValueError, match="0.095"):
+        client.validate_settings(settings, False)
+
+
+@pytest.mark.parametrize("failure", ["enable", "send"])
+def test_p7_motion_failure_releases_and_never_executes_warmup(monkeypatch, failure):
+    from dataclasses import replace
+    import yaml
+    from wam.deployment.p7.client import DEFAULT_DEPLOYMENT_CONFIG
+    client = load_file("v3_p7_cleanup", ROOT / "scripts/realrobot_v3_client.py")
+    settings = yaml.safe_load((ROOT / "configs/realrobot_v3_inference.yaml").read_text())
+    settings["client"]["interfaces_verified"] = True
+    config = replace(client.load_deployment_config(DEFAULT_DEPLOYMENT_CONFIG), arms="both")
+    calls = []
+
+    class Robot:
+        def __init__(self, *args):
+            pass
+
+        def observation(self, prompt):
+            obs = observation()
+            obs["observation/camera_timestamps"][:] = client.time.monotonic()
+            obs["observation/state_timestamp"] = client.time.monotonic()
+            calls.append("observe")
+            return obs
+
+        def enable_servo(self):
+            calls.append("enable")
+            if failure == "enable":
+                raise RuntimeError("enable failed")
+
+        def mark_moving(self):
+            calls.append("mark")
+
+        def stop_motion(self):
+            calls.append("stop")
+            if failure == "send":
+                raise RuntimeError("stop failed")
+
+        def close(self):
+            calls.append("release")
+
+    class Policy:
+        def __init__(self, *args):
+            pass
+
+        def infer(self, obs):
+            calls.append("infer")
+            return dict(actions=np.tile(pose(), (4, 1)), observation_id=obs["observation_id"],
+                        task="cup_stacking", input_mode="mono-left", action_rate_hz=20,
+                        first_target_offset_s=0.05)
+
+        def close(self):
+            calls.append("policy_close")
+
+    def send(*args):
+        calls.append("send")
+        raise RuntimeError("send failed")
+
+    monkeypatch.setattr(client, "V3P7System", Robot)
+    monkeypatch.setattr(client, "PolicyClient", Policy)
+    monkeypatch.setattr(client, "check_anchor", lambda *args: pose())
+    monkeypatch.setattr(client, "send_target", send)
+    monkeypatch.setattr("builtins.input", lambda *args: "")
+    with pytest.raises(RuntimeError):
+        client.run(settings, config, enable_motion=True)
+    assert calls[:3] == ["observe", "infer", "enable"]
+    if failure == "enable":
+        assert "mark" not in calls and "send" not in calls
+    else:
+        assert calls[3:7] == ["mark", "observe", "infer", "send"]
+    assert calls[-3:] == ["policy_close", "stop", "release"]

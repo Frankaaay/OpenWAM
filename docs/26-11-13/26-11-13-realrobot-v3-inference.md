@@ -1,5 +1,42 @@
 # 真机 v3 OpenWAM 推理适配
 
+## P7 二代臂适配（当前部署入口）
+
+用户明确改为二代P7，并授权修改后push。目标仍为OpenWAM的frank/realrobot-v3-inference，
+修改基线bece4d14e9def732ad65f5e5e391e37edee81da0；fetch origin/frank和fast-forward检查完成。
+只读参考Kevin分支kevin/p7-deploy-261029，实时SHA为06ebf02d1d7806c5b20c03bcfbc682bd61446103。
+未切换、修改或推送orion-0工作区。下方一代臂的UVC、airbot_py和旧ORION版本说明为历史记录，
+当前启动方式以根README的P7章节为准。
+
+- 客户端依赖P7System/load_deployment_config：arm_p7_sdk连接X5 arm_app（默认50071/50072），
+  CORA读取三路左目，Stereo另加三路真实右目话题；右目沿用各安装位rotate_180。
+- 删除UVC设备读取路径，配置right_camera_devices改为right_camera_topics。
+  读取完整4:3 RGB，以PIL BILINEAR缩到256×192，再交给未修改的模型mosaic路径。
+  原始v3 reader证实训练使用256×192的视频，源转换器的插值/旋转逐像素一致性尚未验证，
+  现场须对照训练图像核对方向和视野；没有把新增resize称为已证实的源转换器复现。
+- P7读取pose.position/orientation和eef_pos毫米反馈；anchor检查转为米。
+  模型输出保持原始米单位，复用P7.send在SDK边界乘1000一次，限制范围0..0.095m。
+  未引入canonical openness、P7 canonical server的-0.0984m偏移或TCP128。
+- 要求arms: both、TCP、同步20Hz且TTRTC关闭，拒绝上游默认arms: right。
+  check-only不获取控制权；确认后enable_servo，再mark_moving并重新采样。
+  部分enable失败由P7.close释放已获取的控制权；完成/异常先stop_motion，finally确保close。
+- 模型服务、归一化、checkpoint、采样与动作还原未改；不重跑已完成GPU smoke，
+  不恢复用户取消的Stereo交接测试。既有3/4结果只覆盖模型侧，不代表P7硬件验证。
+
+验证位置：本机授权OpenWAM worktree。使用git archive将精确Kevin SHA的部署模块提取到
+C:/Users/Frank/AppData/Local/Temp/openwam-p7-06ebf02，未更改orion-0分支。
+PYTHONPATH指向该目录src，运行：
+
+```powershell
+uv run --with numpy --with scipy --with pillow --with pyyaml --with pytest --no-project python -m pytest -q tests/test_realrobot_v3.py
+uv run --with numpy --with pillow --with pyyaml --no-project python scripts/realrobot_v3_client.py --help
+```
+
+结果20 passed（1.48秒），CLI帮助通过，git diff --check通过。
+新增测试使用实际P7模块及mock SDK反馈/发送：TCP不偏移、夹爪米/毫米单次转换、anchor漂移拒绝、
+三/六目映射与时间戳、全视野resize、单臂/超范围拒绝、只推理零运动、enable/send/stop异常释放。
+真实arm_p7_sdk/CORA服务、现场坐标和相机方向、控制权获取及伺服执行留待同事现场check-only后验证。
+
 ## 最终交付状态（更新覆盖下方历史记录）
 
 根据用户要求，将现场部署步骤写入本分支根README：固定依赖、四权重路径和验证状态、

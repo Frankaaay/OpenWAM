@@ -1,5 +1,5 @@
 # Use the SAME file on server and robot client. The robot's existing ORION
-# deployment YAML supplies robot IPs, left-eye devices, servo/interpolation limits.
+# P7 deployment YAML supplies arm_app ports, left-eye CORA topics and servo limits.
 task: cup_stacking
 input_mode: mono-left  # stereo requires real right cameras at all three mounts
 inference:
@@ -9,9 +9,12 @@ inference:
   max_rotation: 0.5     # radians from observation anchor
   max_skew_s: 0.035     # host acquisition timestamps; not exposure-sync certification
 client:
-  right_camera_devices: null  # stereo: [head-right, left-wrist-right, right-wrist-right]
+  right_camera_topics:  # used only for stereo, in head/left-wrist/right-wrist order
+    - rt/camera/head/right/image_rect
+    - rt/camera/left_wrist/right/image_rect
+    - rt/camera/right_wrist/right/image_rect
   interfaces_verified: false  # only true after recorded-pose/SDK and image parity checks
-  raw_gripper_limits: [[0.0, 1.0], [0.0, 1.0]]  # provisional SDK bounds: verify on site
+  raw_gripper_limits: [[0.0, 0.095], [0.0, 0.095]]  # P7 G2P width in metres; SDK converts to mm
   max_steps: 20
   max_round_trip_s: 2.0  # warm-up excluded; H100 measured 0.61-0.63s; includes network margin
   max_observation_age_s: 0.1

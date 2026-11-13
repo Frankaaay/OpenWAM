@@ -14,15 +14,17 @@
   <img src="assets/repo_images/teaser.jpg" alt="OpenWAM teaser">
 </p>
 
-## ORION 双臂真机 v3 部署（本分支）
+## ORION P7 二代双臂真机 v3 部署（本分支）
 
 代码分支：`frank/realrobot-v3-inference`。2026-11-13 已通过 GPU smoke 的权重为 **Wan 叠杯、Wan 交接、Stereo 叠杯**；Stereo 交接按用户要求停止，未完成验证。三项均通过真实记录归一化/TCP 往返、严格加载和两次 10 步推理；这不代表真机闭环已验证。
+
+P7 客户端适配通过 20 项 CPU 合同/模拟 SDK 测试，尚待现场验证真实 SDK、CORA 相机和伺服执行。模型侧推理代码未改变，上述 GPU 结果不等于 P7 硬件验证。
 
 ### 1. 准备代码、环境和资产
 
 在 GPU 机器使用本分支 OpenWAM 和已配置的 CUDA/PyTorch 环境（安装方法见下方 Installation），以及以下版本的依赖源码：
 
-- orion-0：`783b602d128a43814af32285e60a60f270ec2703`。
+- orion-0：Kevin 的 `kevin/p7-deploy-261029` 分支，固定 `06ebf02d1d7806c5b20c03bcfbc682bd61446103`。客户端复用 `src/wam/deployment/p7/`，不是一代臂的 `airbot_py` 客户端。
 - FastWAM：`491e518fac6e04646ecfbd464027dd575ed99bde`，Stereo 必需。
 - 本次 H100 验证环境：`/mnt/workdir/frank/envs/openwam-baselines-20261014/bin/python`，PyTorch 2.7.1+cu128。该路径在既有运行容器内使用，不在登录节点运行模型。
 
@@ -35,7 +37,7 @@ H100 资产根目录为 `/gpfs/jiuquyun/projects/Frank/realrobot-v3-posttrain-20
 | Stereo 叠杯 | `stereo-r2/formal/cup_stacking/2026-11-12_10-48-57/checkpoint_step_9090.safetensors` | 通过 |
 | Stereo 交接 | `stereo-r2/formal/object_handover/2026-11-12_16-33-52/checkpoint_step_10930.safetensors` | 未完成 |
 
-配置、统计量和 tokenizer 已补齐。迁往现场 GPU 时，保留对应权重同目录的 `config.yaml`、`realrobot_stats.json`、`data-contract.json`、`tokenizer/`，Stereo 另带 `stereotok.json`。不要混用其他任务的统计量。机器人端沿用现有 AIRBOT SDK 环境，需要 NumPy、PyYAML、OpenCV、`airbot_py` 和上述 ORION 源码；不需要加载模型。
+配置、统计量和 tokenizer 已补齐。迁往现场 GPU 时，保留对应权重同目录的 `config.yaml`、`realrobot_stats.json`、`data-contract.json`、`tokenizer/`，Stereo 另带 `stereotok.json`。不要混用其他任务的统计量。机器人客户端在 X5 的现有环境运行，需要 NumPy、PyYAML、Pillow、OpenCV、`arm_p7_sdk`、`cora` 和上述 ORION 源码；不需要加载模型。先启动现场 `arm_app` 和发布 CORA 图像的 `robot_app`，开启运动前退出占用控制权的 `teleop_drive`。
 
 ### 2. 配置任务和现场设备
 
@@ -46,26 +48,46 @@ task: cup_stacking       # 交接改为 object_handover
 input_mode: mono-left    # Wan 用 mono-left；Stereo 用 stereo
 ```
 
-Stereo 需填写 `client.right_camera_devices`，顺序为 head-right、left-wrist-right、right-wrist-right，必须是三个真实右目设备。Wan 使用三个安装位的左目。
+Stereo 的 `client.right_camera_topics` 已填写 head-right、left-wrist-right、right-wrist-right 三个 `rt/camera/.../right/image_rect` 话题；按现场发布名称核对。Wan 使用三个安装位的左目。每安装位左右目共用 P7 配置的 `rotate_180`。
 
-沿用现场 ORION `deployment_config.yaml`，填写实际机器人 IP 和左目设备，并核对这些字段（保留其余现场设置）：
+从 ORION 的 `src/wam/deployment/p7/deployment_config.yaml` 复制现场配置，修改以下字段并保留其他必需字段（不要使用一代臂配置）。上游默认 `arms: right` 必须改为 `both`：
 
 ```yaml
 action_space: tcp
+arms: both
 policy:
+  module: null
   host: 127.0.0.1
   port: 8000
+robots:
+  host: localhost
+  left_port: 50071
+  right_port: 50072
 cameras:
-  devices: [<head-left>, <left-wrist-left>, <right-wrist-left>]
-  width: 256
-  height: 192
+  topics:
+    - rt/camera/head/left/image_rect
+    - rt/camera/left_wrist/left/image_rect
+    - rt/camera/right_wrist/left/image_rect
+  rotate_180: [true, false, false]  # Kevin 的安装方向；现场对照训练图像核实
+  fps: 30
 control:
   hz: 20
+  servo_hz: 200
+  actions_per_chunk: 4
+  max_steps: 20
 async:
   enabled: false
+  prefetch_actions: 4
+  rtc_weight_factor: 0.3
+ttrtc:
+  enabled: false
+  delay: auto
+  margin_steps: 1
 ```
 
-`<...>` 替换为实际设备路径。图像必须为全视野 RGB uint8、256×192；实际采集尺寸和视野要与训练记录一致。沿用同一套 ORION 双臂硬件，现场核对的是记录与 SDK 的 TCP 坐标、原始夹爪量纲和相机对应。不要套用二值夹爪或重复归一化。
+P7 CORA 默认输出 640×480；客户端接收 RGB 后保持完整 4:3 视野，用 PIL BILINEAR 缩放为模型所需的 256×192，不裁剪或 letterbox。现场须对照训练记录检查头部是否需翻转、左右目及视野；本次尚未验证现场与原视频转换器的逐像素一致性。
+
+TCP 使用 P7 SDK 的 xyz/xyzw；夹爪在观测和模型输出中用米，P7 SDK 边界负责毫米转换。范围限制为 0–0.095 m，不二值化、不裁剪预测值、不重复归一化。仍使用 OpenWAM v3 服务端，不运行 Kevin 的 canonical P7 server，也不套用其 TCP128/坐标偏移转换。
 
 ### 3. GPU 端启动服务
 
@@ -93,7 +115,7 @@ ORION policy 地址保持 `127.0.0.1:8000`。协议使用 pickle，只用于可�
 
 ### 4. 机器人端先检查，再开启运动
 
-在机器人端激活原有 AIRBOT 环境，并设置本机路径：
+在 X5 端激活现有 P7 环境，并设置本机路径：
 
 ```bash
 export OPENWAM=/absolute/path/to/OpenWAM
@@ -106,7 +128,7 @@ python "$OPENWAM/scripts/realrobot_v3_client.py" \
   --robot-config "$ROBOT_CONFIG"
 ```
 
-默认仅采集并推理一次，不复位、不切换运动模式、不发送动作。确认观测、TCP 坐标、夹爪数值和图像对应正确，按 SDK 实际范围填写 `client.raw_gripper_limits`（默认 `[0,1]` 为待核实值），再将 `client.interfaces_verified` 设为 `true`。开启运动：
+默认仅采集并推理一次，不获取控制权、不复位、不切换运动模式、不发送动作。确认观测、TCP 坐标、夹爪数值和图像对应正确后，再将 `client.interfaces_verified` 设为 `true`。`client.raw_gripper_limits` 默认两臂均为 `[0,0.095]` 米，可按现场限制收紧。开启运动：
 
 ```bash
 python "$OPENWAM/scripts/realrobot_v3_client.py" \
@@ -115,7 +137,7 @@ python "$OPENWAM/scripts/realrobot_v3_client.py" \
   --enable-motion
 ```
 
-程序先预热，按 Enter 后重新采集观测再运动，不执行预热输出。默认每轮执行 4 个目标，最多 20 个目标点。保留默认位姿和 anchor 漂移检查；客户端稳态往返上限为 2 秒。
+程序先预热，按 Enter 后获取双臂控制权、切换 servo，重新采集观测再运动，不执行预热输出。默认每轮执行 4 个目标，最多 20 个目标点。保留默认位姿和 anchor 漂移检查；客户端稳态往返上限为 2 秒。结束或异常时调用 P7 停止运动和释放控制权流程。
 
 H100 实测预热后推理 0.608/0.618/0.630 秒（依次为 Wan 叠杯、Wan 交接、Stereo 叠杯）；峰值显存 Wan 约 23.4 GiB、Stereo 约 37.2 GiB。Stereo 首次推理约 30 秒，需等待预热完成。当前行为是“同步等待推理 → 以 20 Hz 执行 4 步”，并非持续 20 Hz 闭环；网络往返耗时需现场观察。
 
