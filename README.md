@@ -14,6 +14,113 @@
   <img src="assets/repo_images/teaser.jpg" alt="OpenWAM teaser">
 </p>
 
+## ORION 双臂真机 v3 部署（本分支）
+
+代码分支：`frank/realrobot-v3-inference`。2026-11-13 已通过 GPU smoke 的权重为 **Wan 叠杯、Wan 交接、Stereo 叠杯**；Stereo 交接按用户要求停止，未完成验证。三项均通过真实记录归一化/TCP 往返、严格加载和两次 10 步推理；这不代表真机闭环已验证。
+
+### 1. 准备代码、环境和资产
+
+在 GPU 机器使用本分支 OpenWAM 和已配置的 CUDA/PyTorch 环境（安装方法见下方 Installation），以及以下版本的依赖源码：
+
+- orion-0：`783b602d128a43814af32285e60a60f270ec2703`。
+- FastWAM：`491e518fac6e04646ecfbd464027dd575ed99bde`，Stereo 必需。
+- 本次 H100 验证环境：`/mnt/workdir/frank/envs/openwam-baselines-20261014/bin/python`，PyTorch 2.7.1+cu128。该路径在既有运行容器内使用，不在登录节点运行模型。
+
+H100 资产根目录为 `/gpfs/jiuquyun/projects/Frank/realrobot-v3-posttrain-20261111/`：
+
+| 模型/任务 | 相对根目录的最终权重路径 | GPU smoke |
+|---|---|---|
+| Wan 叠杯 | `wan/formal/cup_stacking/2026-11-11_23-31-51/checkpoint_step_9090.safetensors` | 通过 |
+| Wan 交接 | `wan/formal/object_handover/2026-11-12_04-35-36/checkpoint_step_10930.safetensors` | 通过 |
+| Stereo 叠杯 | `stereo-r2/formal/cup_stacking/2026-11-12_10-48-57/checkpoint_step_9090.safetensors` | 通过 |
+| Stereo 交接 | `stereo-r2/formal/object_handover/2026-11-12_16-33-52/checkpoint_step_10930.safetensors` | 未完成 |
+
+配置、统计量和 tokenizer 已补齐。迁往现场 GPU 时，保留对应权重同目录的 `config.yaml`、`realrobot_stats.json`、`data-contract.json`、`tokenizer/`，Stereo 另带 `stereotok.json`。不要混用其他任务的统计量。机器人端沿用现有 AIRBOT SDK 环境，需要 NumPy、PyYAML、OpenCV、`airbot_py` 和上述 ORION 源码；不需要加载模型。
+
+### 2. 配置任务和现场设备
+
+编辑本分支的 [`configs/realrobot_v3_inference.yaml`](configs/realrobot_v3_inference.yaml)，GPU 端和机器人端使用相同内容：
+
+```yaml
+task: cup_stacking       # 交接改为 object_handover
+input_mode: mono-left    # Wan 用 mono-left；Stereo 用 stereo
+```
+
+Stereo 需填写 `client.right_camera_devices`，顺序为 head-right、left-wrist-right、right-wrist-right，必须是三个真实右目设备。Wan 使用三个安装位的左目。
+
+沿用现场 ORION `deployment_config.yaml`，填写实际机器人 IP 和左目设备，并核对这些字段（保留其余现场设置）：
+
+```yaml
+action_space: tcp
+policy:
+  host: 127.0.0.1
+  port: 8000
+cameras:
+  devices: [<head-left>, <left-wrist-left>, <right-wrist-left>]
+  width: 256
+  height: 192
+control:
+  hz: 20
+async:
+  enabled: false
+```
+
+`<...>` 替换为实际设备路径。图像必须为全视野 RGB uint8、256×192；实际采集尺寸和视野要与训练记录一致。沿用同一套 ORION 双臂硬件，现场核对的是记录与 SDK 的 TCP 坐标、原始夹爪量纲和相机对应。不要套用二值夹爪或重复归一化。
+
+### 3. GPU 端启动服务
+
+先激活 GPU 环境，将以下路径替换为该机器的实际路径：
+
+```bash
+export OPENWAM=/absolute/path/to/OpenWAM
+export ORION=/absolute/path/to/orion-0
+export FASTWAM=/absolute/path/to/FastWAM
+export CHECKPOINT=/absolute/path/to/final-run/checkpoint_step_9090.safetensors
+export PYTHONPATH="$OPENWAM:$ORION/src:$FASTWAM/src${PYTHONPATH:+:$PYTHONPATH}"
+
+python -m openwam.deploy.realrobot_v3 \
+  --checkpoint "$CHECKPOINT" \
+  --config "$OPENWAM/configs/realrobot_v3_inference.yaml"
+```
+
+默认监听 `127.0.0.1:8000`。GPU 与机器人分机部署时，在机器人端另开终端并保持 SSH 隧道运行，目标必须是实际运行服务的 GPU 主机：
+
+```bash
+ssh -N -L 8000:127.0.0.1:8000 user@gpu-host
+```
+
+ORION policy 地址保持 `127.0.0.1:8000`。协议使用 pickle，只用于可信连接。
+
+### 4. 机器人端先检查，再开启运动
+
+在机器人端激活原有 AIRBOT 环境，并设置本机路径：
+
+```bash
+export OPENWAM=/absolute/path/to/OpenWAM
+export ORION=/absolute/path/to/orion-0
+export ROBOT_CONFIG=/absolute/path/to/site-deployment-config.yaml
+export PYTHONPATH="$ORION/src${PYTHONPATH:+:$PYTHONPATH}"
+
+python "$OPENWAM/scripts/realrobot_v3_client.py" \
+  --config "$OPENWAM/configs/realrobot_v3_inference.yaml" \
+  --robot-config "$ROBOT_CONFIG"
+```
+
+默认仅采集并推理一次，不复位、不切换运动模式、不发送动作。确认观测、TCP 坐标、夹爪数值和图像对应正确，按 SDK 实际范围填写 `client.raw_gripper_limits`（默认 `[0,1]` 为待核实值），再将 `client.interfaces_verified` 设为 `true`。开启运动：
+
+```bash
+python "$OPENWAM/scripts/realrobot_v3_client.py" \
+  --config "$OPENWAM/configs/realrobot_v3_inference.yaml" \
+  --robot-config "$ROBOT_CONFIG" \
+  --enable-motion
+```
+
+程序先预热，按 Enter 后重新采集观测再运动，不执行预热输出。默认每轮执行 4 个目标，最多 20 个目标点。保留默认位姿和 anchor 漂移检查；客户端稳态往返上限为 2 秒。
+
+H100 实测预热后推理 0.608/0.618/0.630 秒（依次为 Wan 叠杯、Wan 交接、Stereo 叠杯）；峰值显存 Wan 约 23.4 GiB、Stereo 约 37.2 GiB。Stereo 首次推理约 30 秒，需等待预热完成。当前行为是“同步等待推理 → 以 20 Hz 执行 4 步”，并非持续 20 Hz 闭环；网络往返耗时需现场观察。
+
+更多接口约定、验证记录和日志路径见 [真机 v3 推理记录](docs/26-11-13/26-11-13-realrobot-v3-inference.md)。
+
 ## What is OpenWAM
 
 OpenWAM is an open research stack for systematically developing **World-Action Models (WAMs)**. It turns tightly coupled design choices into modular components and controlled experiments. It consists of:
