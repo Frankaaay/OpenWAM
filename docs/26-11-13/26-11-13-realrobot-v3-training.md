@@ -36,3 +36,24 @@ CPU检查54556/54557在import cv2时缺libGL.so.1，精确路径的既有库实�
 核对所有70条预约并定向复核0060的6条记录，23:58–次日01:00为空档；已创建8卡预约reczz28ZCcXl2QTc（2026-11-13 23:58至2026-11-14 01:00，北京时间），关联本模型卡，不更改他人预约。
 
 54559已越过libGL导入，但直接运行tests脚本使tests/dataloader遮蔽Orion的dataloader.pretrain。CPU隔离探针确认Orion源文件及PYTHONPATH正确；仅将验收脚本sys.path[0]设为仓库根，避免测试目录命名冲突。未改生产reader或动作计算。
+
+CPU54561最终COMPLETED/0:0，耗时2m49s，222条episode首中末窗口、29,070窗口计数及原样本归一化parity通过。实际容器Torch2.7.1+cu128、Accelerate1.15.0、DeepSpeed0.18.9；Wan配置CPU preflight通过。
+
+23:33全部资产完成H100下载与SHA256回读校验，接收54554 COMPLETED/0:0，54m25s；源导出dlc6ncglndpmms69成功。最终回执`transfer/all-assets-verified.json`。Wan SHA256 `fa265bfd1e6441fe055ab4a29410b23739b0711ffb8016ed4dc6f3a22d0fd6d7`；Stereo SHA256 `09138a61c70f1e201059f3712dc7c62520ffd6aeca151734237603fa1a5a4a64`。
+
+GPU54563于23:33:28提前以idle启动，xn01-gpu1-0060，8GPU/64CPU/768Gi/1h、no-requeue，实际运行SHA `78a84c69d13afc67cd2aa0fbb22687c561c774ea`。输出`/gpfs/jiuquyun/projects/Frank/realrobot-v3-train-20261113/smoke-78a84c6`，日志`/gpfs/jiuquyun/home/Frank/logs/realrobot-v3-training-smoke-54563.out`。预约起点仍23:58，启动时AdminComment=h100:idle，不将提前开始描述为受保护。
+
+## 最终验收（23:55）
+
+Slurm54563及全部7个step均COMPLETED/0:0；23:33:28–23:55:23，总21m55s，Wan→Stereo串行，最大8GPU。日志最终`BOTH_V3_H100_TRAINING_SMOKES_PASSED`。预约reczz28ZCcXl2QTc回填实际起止并结束，未使用的保护时段释放。
+
+| 模型 | 实际优化器更新 | 首/末 total loss | 首/末 action loss | step10 SHA256 |
+|---|---:|---|---|---|
+| Wan | 10 | 0.94165254 / 0.61607546 | 0.68336481 / 0.40278023 | 2a5fa58fe957fc38cfa0278874df9588aa50178ec30f1aad61a4f8976ac9ae59 |
+| Stereo | 10 | 0.82930195 / 0.56731081 | 0.62767810 / 0.41124097 | d72af4a0fcc1707e5b0f023a4c8712b5131efb9979fb7908b573846fc2e75664 |
+
+两路全部10步total/video/action loss及grad_norm均有限。保存权重key/shape与各自50101源完全一致，所有tensor有限；action_decoder.bias/weight、action_encoder.bias与源权重不同，证实实际更新。GPU运行未出现OOM。Stereo首步含Torch编译约72.8s，后续约1.2s/step；这只是smoke，不推断正式任务收敛或策略成功率。
+
+Wan产物：`smoke-78a84c6/wan/2026-11-13_23-41-45/checkpoint_step_10.safetensors`（24,813,767,464 bytes）。Stereo产物：`smoke-78a84c6/stereo/2026-11-13_23-50-10/checkpoint_step_10.safetensors`（28,010,369,300 bytes）。路径相对上述H100资产根。各模型目录有`result.json`、`smoke-verified.json`，时间戳目录有`metrics.jsonl`、`data-contract.json`、实际入口与配置。
+
+新任务沿用同一v3数据合同，先由完整native发布包生成该任务独立stats/catalog，再用各自原50101初始化，固定每路10epoch。正式训练未启动；正式W&B online初始化和新数据完整性须在新数据到位后实查。本次smoke禁用W&B，未将其冒充online验收。
