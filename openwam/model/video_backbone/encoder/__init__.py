@@ -43,6 +43,7 @@ __all__ = [
     "VJEPA21VideoEncoder",
     "WanVideoVAEEncoder",
     "StereoTokVideoEncoder",
+    "WanBinoVideoEncoder",
     "build_video_encoder",
     "register_video_encoder",
     "_VIDEO_ENCODER_REGISTRY",
@@ -56,3 +57,4 @@ from openwam.model.video_backbone.encoder.flux2_vae import FluxVAEVideoEncoder  
 from openwam.model.video_backbone.encoder.vjepa21 import VJEPA21VideoEncoder  # noqa: E402, F401
 from openwam.model.video_backbone.encoder.wan22_vae import WanVideoVAEEncoder  # noqa: E402, F401
 from openwam.model.video_backbone.encoder.stereotok import StereoTokVideoEncoder  # noqa: E402, F401
+from openwam.model.video_backbone.encoder.wan22_vae_bino import WanBinoVideoEncoder  # noqa: E402, F401

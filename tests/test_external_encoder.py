@@ -2800,3 +2800,29 @@ def test_stereo_ti2v_conditioning_uses_both_eyes():
     finalize(shared, None, **dict(kw, encoder=None, vae=native))
     assert "first_frame_latents" not in shared
     assert shared["fuse_vae_embedding_in_latents"] is False
+
+
+def test_wan_bino_encoder_matches_independent_per_eye_wan_encode():
+    from openwam.model.video_backbone.encoder.wan22_vae_bino import WanBinoVideoEncoder
+    from openwam.model.video_backbone.wan import encode as wan_encode
+    from openwam.model.video_backbone.wan.models.vae import WanVideoVAE38
+
+    torch.manual_seed(0)
+    vae = WanVideoVAE38().to(torch.bfloat16)
+    encoder = WanBinoVideoEncoder(vae)
+    assert _VIDEO_ENCODER_REGISTRY["wan22_vae_bino"] is WanBinoVideoEncoder
+    left = torch.rand(1, 3, 5, 32, 48, dtype=torch.bfloat16) * 2 - 1
+    right = torch.rand(1, 3, 5, 32, 48, dtype=torch.bfloat16) * 2 - 1
+    latents = wan_encode.encode_video(left, vae=None, encoder=encoder, right_video_tensor=right)
+    assert tuple(latents.shape) == (1, 48, 2, 2, 6)
+    with torch.no_grad():
+        assert torch.equal(latents[..., :3], vae.batch_encode(left, device="cpu"))
+        assert torch.equal(latents[..., 3:], vae.batch_encode(right, device="cpu"))
+    same = wan_encode.encode_video(left, vae=None, encoder=encoder, right_video_tensor=left)
+    assert torch.equal(same[..., :3], same[..., 3:])
+    with pytest.raises(ValueError):
+        wan_encode.encode_video(left, vae=None, encoder=encoder)
+    video = encoder.decode(latents, tiled=False)
+    assert tuple(video.shape) == (1, 3, 5, 32, 96)
+    encoder.train()
+    assert not encoder.training and not any(p.requires_grad for p in encoder.parameters())

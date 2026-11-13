@@ -990,7 +990,7 @@ class WanBase(VideoBackbone):
         # (same tensor under both keys, as base.generate expects).
         noise = wan_conditioning.build_deploy_noise(
             height=height,
-            width=width,
+            width=width * getattr(self.video_encoder, "width_factor", 1),
             num_frames=num_frames,
             seed=seed,
             rand_device="cpu",

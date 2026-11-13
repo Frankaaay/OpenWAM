@@ -118,8 +118,9 @@ class ObsPreprocessor:
             img_width=int(_w if _w is not None else 320),
             requires_proprio=_resolve_requires_proprio(cfg, engine),
             requires_stereo=(
-                _cfg_select(cfg, "model.video_backbone.encoder.name") == "stereotok"
-                and _cfg_select(cfg, "model.video_backbone.encoder.input_mode", "stereo") == "stereo"
+                (_cfg_select(cfg, "model.video_backbone.encoder.name") == "wan22_vae_bino")
+                or (_cfg_select(cfg, "model.video_backbone.encoder.name") == "stereotok"
+                    and _cfg_select(cfg, "model.video_backbone.encoder.input_mode", "stereo") == "stereo")
             ),
         )
 
