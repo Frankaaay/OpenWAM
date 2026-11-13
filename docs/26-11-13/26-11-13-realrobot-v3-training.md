@@ -28,3 +28,9 @@ python -m openwam.dataloader.realrobot_v3 --data /absolute/new-v3-release --prep
 ```
 
 正式入口使用显式data/prepared/task/checkpoint/output，去掉--smoke，固定10epoch；新数据未到位前不提交正式训练。
+
+## H100 CPU验收与调度
+
+CPU检查54556/54557在import cv2时缺libGL.so.1，精确路径的既有库实际存在。Pyxis启动时未保留提交环境的LD_LIBRARY_PATH；改在容器命令内显式env传入，未安装依赖或修改共享环境。54559重试中。GPU launcher同步此定向修复。
+
+核对所有70条预约并定向复核0060的6条记录，23:58–次日01:00为空档；已创建8卡预约reczz28ZCcXl2QTc（2026-11-13 23:58至2026-11-14 01:00，北京时间），关联本模型卡，不更改他人预约。

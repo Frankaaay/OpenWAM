@@ -33,15 +33,15 @@ python=/mnt/workdir/frank/envs/openwam-baselines-20261014/bin/python
 runtime=(--container-image="$migration/source-runtime.sqsh"
  --container-mounts="$migration/mirror/mnt/workdir:/mnt/workdir,/gpfs/jiuquyun/projects/Frank:/gpfs/jiuquyun/projects/Frank"
  --container-workdir="$repo")
-srun "${runtime[@]}" "$python" tests/verify_realrobot_v3_training.py --assets "$assets"
+srun "${runtime[@]}" env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" "$python" tests/verify_realrobot_v3_training.py --assets "$assets"
 for model in wan stereo; do
- srun "${runtime[@]}" "$python" scripts/train_realrobot_v3.py --model "$model" --task cup_stacking \
+ srun "${runtime[@]}" env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" "$python" scripts/train_realrobot_v3.py --model "$model" --task cup_stacking \
   --data "$assets/data" --prepared "$assets/preparation" \
   --checkpoint "$assets/midtrain/$model/checkpoint_step_50101.safetensors" --output "$output/$model" --smoke --preflight
- srun "${runtime[@]}" "$python" -m torch.distributed.run --standalone --nnodes=1 --nproc_per_node=8 \
+ srun "${runtime[@]}" env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" "$python" -m torch.distributed.run --standalone --nnodes=1 --nproc_per_node=8 \
   scripts/train_realrobot_v3.py --model "$model" --task cup_stacking \
   --data "$assets/data" --prepared "$assets/preparation" \
   --checkpoint "$assets/midtrain/$model/checkpoint_step_50101.safetensors" --output "$output/$model" --smoke
- srun "${runtime[@]}" "$python" tests/verify_realrobot_v3_training.py --assets "$assets" --run "$output/$model" --model "$model"
+ srun "${runtime[@]}" env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" "$python" tests/verify_realrobot_v3_training.py --assets "$assets" --run "$output/$model" --model "$model"
 done
 echo BOTH_V3_H100_TRAINING_SMOKES_PASSED
