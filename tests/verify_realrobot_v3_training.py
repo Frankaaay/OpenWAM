@@ -7,17 +7,16 @@ import math
 import sys
 from pathlib import Path
 
-# Direct execution otherwise puts tests/dataloader ahead of Orion's dataloader.
-sys.path[0] = str(Path(__file__).resolve().parents[1])
-
-import numpy as np
-import torch
-from safetensors import safe_open
-
-from openwam.dataloader.realrobot_v3 import V3Dataset
-
 
 def main():
+    # Direct execution otherwise puts tests/dataloader ahead of Orion's dataloader.
+    sys.path[0] = str(Path(__file__).resolve().parents[1])
+    import numpy as np
+    import torch
+    from safetensors import safe_open
+
+    from openwam.dataloader.realrobot_v3 import V3Dataset
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--assets", type=Path, required=True)
     parser.add_argument("--run", type=Path)
