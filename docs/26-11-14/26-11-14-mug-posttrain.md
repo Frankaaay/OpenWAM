@@ -21,3 +21,9 @@ H100任务根保存run-receipt.md。未做GPU抢占注入演练，不声称完�
 用户要求明确右边马克杯与挂架动作，英文统一为`Pick up the mug on the right and hang it on the rack.`。01:37明确取消旧作业54580/54581（均CANCELLED，step收到终止信号不是训练自身异常），保留全部旧产物。新根`/gpfs/jiuquyun/projects/Frank/mug-v3-posttrain-20261114-prompt-v2`复用原固定data快照，复制preparation并只替换245条catalog instruction，stats与states不变。两路从原50101重新初始化，不接旧prompt权重。
 
 检查发现原恢复合同未记录catalog内容，故在现有合同增加catalog SHA256与实际instructions，改prompt不能误接旧训练状态。复查既有监督路径：每臂独立固定anchor坐标系相对位姿、rowRot6D、gripper保留原宽度并zscore；不读取action16作为监督。训练video/proprio/action mask沿用0:10与34:44槽位；a=0首动作历史tick被mask，不纳入统计。此轮复算全部17755窗口的统计与归一化逆变换，抽查两路首/中/末样本prompt、左右目、保留槽位及shape。结果与新JobID待回填。
+
+CPU54582 COMPLETED/0:0，34s：全量state17755/action603425复算通过，state std最大误差5.52e-11、action std最大误差8.92e-14；逆变换正确，无NaN/Inf。归一化最大绝对值state9.79/action22.33，不裁剪或改变监督；左夹爪维度9恒为0，std下限1e-6正常处理。两路首/中/末实际读取的prompt等于新英文，action/proprio与左目图像完全相同，Stereo另有真实右目，保留槽位为0且mask=false。
+
+新catalog SHA256 d5484bb5309edde37aa80588793bb9de074b3ac395e456ccdad17e8a1ba104d5；stats SHA256保持05f3073d61786af408bd74cbd4b1498798e117ed3f849be3e64bacbde2513222。审计回执位于v2根training-audit.json，prompt-change.json记录来源及变更。Python编译、ruff、diff、bash -n、sbatch --test-only通过。新运行SHA2d87e3d9b4475726754c757e28d38ae58f81eabf；Wan54584/0059/模型卡reczz28ZFPJwXsI7，Stereo54585/0060/模型卡reczz28ZFPJwXiQW。每路8卡idle、Requeue=1、offline、10epoch5550steps，独立原50101初始化；首批健康检查待回填。
+
+v2启动健康检查通过：实际run data-contract的新英文instructions、catalog SHA与不变stats SHA均匹配。Wan输出formal/wan/2026-11-14_01-43-39，offline run deb8cczw；78步total loss0.51220453、action loss0.38638103、grad_norm1.29149。Stereo输出formal/stereo/2026-11-14_01-43-47，offline run942x0wvq；17步total loss0.80117005、action loss0.69440150、grad_norm1.80218。全部已记录步骤的total/video/action loss及grad_norm有限，两路完整step0恢复标记已落盘。训练仍在进行，未做机器人闭环成功率或实际抢占恢复演练；没有把静态恢复逻辑检查当作真实恢复验收。不中断预计剩余2–3小时含checkpoint写入。
