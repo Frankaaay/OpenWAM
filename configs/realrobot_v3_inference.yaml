@@ -13,7 +13,7 @@ client:
   interfaces_verified: false  # only true after recorded-pose/SDK and image parity checks
   raw_gripper_limits: [[0.0, 1.0], [0.0, 1.0]]  # provisional SDK bounds: verify on site
   max_steps: 20
-  max_round_trip_s: 0.5  # warm-up excluded; measure before changing
+  max_round_trip_s: 2.0  # warm-up excluded; H100 measured 0.61-0.63s; includes network margin
   max_observation_age_s: 0.1
   max_anchor_translation: 0.005
   max_anchor_rotation: 0.05

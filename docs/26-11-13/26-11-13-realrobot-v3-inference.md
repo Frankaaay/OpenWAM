@@ -1,5 +1,21 @@
 # 真机 v3 OpenWAM 推理适配
 
+## 最终交付状态（更新覆盖下方历史记录）
+
+用户授权提交/推送和GPU smoke。实际通过3/4：Wan叠杯、Wan交接、Stereo叠杯。
+用户要求不再测最后一个；Job54520已取消，Stereo交接未完成，不报告通过。
+Wan结果：smoke-results-2433ed8/，对应代码2433ed8938461af388f1b234e0f3481bee349235。
+Stereo叠杯结果：smoke-results-f46b9d7/stereo-cup_stacking.json，代码f46b9d75b04b3f963a9bae60344f55fbbb6796f1。
+上述路径均相对H100 /gpfs/jiuquyun/projects/Frank/realrobot-v3-posttrain-20261111/。
+三项均完成真实记录归一化/TCP往返、严格加载和两次10步GPU推理；输出4×16且通过默认位姿界限。
+预热后时延分别0.608、0.618、0.630秒；Wan峰值23.40GiB，Stereo37.21GiB。
+Stereo首次推理29.86秒（含首次编译/初始化），不计入稳态超时；首次输出不会用于运动。
+基于实测将client.max_round_trip_s从0.5改为2.0秒，保留位姿、anchor及夹爪检查。
+这是同步等待推理后执行4步，不是持续20Hz闭环。真实网络往返需现场观察。
+最终依赖：OpenWAM环境openwam-baselines-20261014；FastWAM固定491e518fac6e04646ecfbd464027dd575ed99bde；
+ORION固定783b602d128a43814af32285e60a60f270ec2703。三项GPU验证不等于真机闭环成功。
+现场使用同一套ORION双臂硬件；只需核对训练记录TCP坐标/夹爪量纲及六目图像对应，不重新选择硬件。
+
 ## 范围与版本
 
 用户授权在 `C:/Project/OpenWAM/.worktree/realrobot-v3-inference`、分支
