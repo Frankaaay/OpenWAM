@@ -171,3 +171,11 @@ TCP表示往返、严格加载、每权重10步去噪两次、检查TCP16有限�
 运行前剩余门禁：当前用户此前同意的开发范围为“暂不commit/push”，H100指南要求
 “服务器验证前按授权commit/push；使用已推送精确SHA的clean clone”。
 本轮已准备可审核的7个具名文件，尚未提交/推送或复制未提交源码到服务器绕过该门禁。
+
+用户已授权commit/push，提交65d83e88d9680e9fe7488e319f5c778f2405542e已推送。
+H100从GitHub clone较慢，改为传输同一已推送提交的git bundle，目标clean clone
+`/gpfs/jiuquyun/projects/Frank/OpenWAM-realrobot-v3-smoke-20261113`，origin仍为Frankaaay/OpenWAM。
+Job54516单卡运行27秒后失败，尚未加载权重：旧FastWAM评测环境缺ftfy。
+定向修复为使用已有OpenWAM环境`/mnt/workdir/frank/envs/openwam-baselines-20261014/bin/python`，
+未修改共享环境或验收条件。两个实际记录样本（叠杯episode1、交接episode0，anchor均0）
+已在本地完成state/action归一化与TCP16/TCP20往返，均在1e-5容差内通过。

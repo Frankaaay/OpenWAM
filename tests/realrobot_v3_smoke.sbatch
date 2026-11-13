@@ -29,7 +29,7 @@ export PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 export PYTHONPATH="$repo:$orion/src:$fastwam/src"
 export LD_LIBRARY_PATH="/mnt/workdir/frank/envs/system-libs/prefix/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
-python=/mnt/workdir/frank/envs/fastwam-stereotok-eval-cu128-20261009/bin/python
+python=/mnt/workdir/frank/envs/openwam-baselines-20261014/bin/python
 for spec in \
  'wan/formal/cup_stacking/2026-11-11_23-31-51|9090|cup_stacking|mono-left' \
  'wan/formal/object_handover/2026-11-12_04-35-36|10930|object_handover|mono-left' \
