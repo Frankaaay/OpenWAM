@@ -34,3 +34,5 @@ python -m openwam.dataloader.realrobot_v3 --data /absolute/new-v3-release --prep
 CPU检查54556/54557在import cv2时缺libGL.so.1，精确路径的既有库实际存在。Pyxis启动时未保留提交环境的LD_LIBRARY_PATH；改在容器命令内显式env传入，未安装依赖或修改共享环境。54559重试中。GPU launcher同步此定向修复。
 
 核对所有70条预约并定向复核0060的6条记录，23:58–次日01:00为空档；已创建8卡预约reczz28ZCcXl2QTc（2026-11-13 23:58至2026-11-14 01:00，北京时间），关联本模型卡，不更改他人预约。
+
+54559已越过libGL导入，但直接运行tests脚本使tests/dataloader遮蔽Orion的dataloader.pretrain。CPU隔离探针确认Orion源文件及PYTHONPATH正确；仅将验收脚本sys.path[0]设为仓库根，避免测试目录命名冲突。未改生产reader或动作计算。

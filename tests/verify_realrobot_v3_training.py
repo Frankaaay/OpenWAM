@@ -4,7 +4,11 @@ import argparse
 import hashlib
 import json
 import math
+import sys
 from pathlib import Path
+
+# Direct execution otherwise puts tests/dataloader ahead of Orion's dataloader.
+sys.path[0] = str(Path(__file__).resolve().parents[1])
 
 import numpy as np
 import torch
