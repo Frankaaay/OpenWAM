@@ -179,3 +179,10 @@ Job54516单卡运行27秒后失败，尚未加载权重：旧FastWAM评测环境
 定向修复为使用已有OpenWAM环境`/mnt/workdir/frank/envs/openwam-baselines-20261014/bin/python`，
 未修改共享环境或验收条件。两个实际记录样本（叠杯episode1、交接episode0，anchor均0）
 已在本地完成state/action归一化与TCP16/TCP20往返，均在1e-5容差内通过。
+
+Job54518使用2433ed8938461af388f1b234e0f3481bee349235运行6分41秒：Wan两权重strict load及两次推理均通过，
+随后Stereo因旧FastWAM950e03缺MetricHead而在加载前失败。Wan结果保存在
+`smoke-results-2433ed8/mono-left-{cup_stacking,object_handover}.json`，不重跑已通过项。
+查训练部署原始记录确认FastWAM应为491e518fac6e04646ecfbd464027dd575ed99bde；
+在Frank独立clone中通过Git获取并固定此SHA，不修改其他正在使用的FastWAM。
+smoke launcher增加仅选择一种输入模式的测试参数，重试只跑两份Stereo；生产推理实现不变。
