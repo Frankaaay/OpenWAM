@@ -15,3 +15,9 @@ CPU54578完成：5709文件/436451578bytes快照，源清单size/mtime前后不�
 H100任务根保存run-receipt.md。未做GPU抢占注入演练，不声称完整恢复链已实测。已保存状态的恢复复用项目既有实现。
 
 启动健康检查已通过：Wan输出formal/wan/2026-11-14_01-26-47，offline run xstdkdt2；检查时27步，total loss1.31139565→0.91822720，末步grad_norm1.60182。Stereo输出formal/stereo/2026-11-14_01-25-21，offline run9w5nagmy；检查时50步，total loss1.17616320→0.55909085，末步grad_norm1.31271。两路完整accel_state_step_0/trainer_state.json均已写完，真实前后向和optimizer更新正常。用户指定offline覆盖仓库默认online，不是静默降级。W&B的offline resume提示仅表示日志新建本地run，不影响DeepSpeed状态恢复逻辑。训练尚未完成；若无抢占，按约1秒/step与完整state写入估计剩余2–3小时。按项目规则完成启动健康检查后不循环监控整场训练。
+
+## Prompt v2 重启
+
+用户要求明确右边马克杯与挂架动作，英文统一为`Pick up the mug on the right and hang it on the rack.`。01:37明确取消旧作业54580/54581（均CANCELLED，step收到终止信号不是训练自身异常），保留全部旧产物。新根`/gpfs/jiuquyun/projects/Frank/mug-v3-posttrain-20261114-prompt-v2`复用原固定data快照，复制preparation并只替换245条catalog instruction，stats与states不变。两路从原50101重新初始化，不接旧prompt权重。
+
+检查发现原恢复合同未记录catalog内容，故在现有合同增加catalog SHA256与实际instructions，改prompt不能误接旧训练状态。复查既有监督路径：每臂独立固定anchor坐标系相对位姿、rowRot6D、gripper保留原宽度并zscore；不读取action16作为监督。训练video/proprio/action mask沿用0:10与34:44槽位；a=0首动作历史tick被mask，不纳入统计。此轮复算全部17755窗口的统计与归一化逆变换，抽查两路首/中/末样本prompt、左右目、保留槽位及shape。结果与新JobID待回填。

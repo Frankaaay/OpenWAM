@@ -131,6 +131,8 @@ def main():
         wandb_mode="disabled" if smoke else "offline",
         independent_init=str(ckpt),
         stats_sha256=hashlib.sha256(stats.read_bytes()).hexdigest(),
+        catalog_sha256=hashlib.sha256((PREP / f"{task}-catalog.json").read_bytes()).hexdigest(),
+        instructions=sorted({row["instruction"] for row in real.rows}),
         info_sha256=hashlib.sha256((data / "meta/info.json").read_bytes()).hexdigest(),
         fused_adamw=True,
         prefetch_factor=2,
