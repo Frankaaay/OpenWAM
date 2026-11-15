@@ -60,6 +60,23 @@ class SwapTests(unittest.TestCase):
         self.assertIs(self.backbone.vae, native)
         self.assertIsNone(self.backbone.video_encoder)
 
+    def test_wan_lr_wrap_preserves_loaded_vae_and_policy_parameters(self):
+        from openwam.model.video_backbone.encoder.wan22_vae_bino import WanBinoVideoEncoder
+        native = self.backbone.vae
+        native.z_dim = 48
+        native.upsampling_factor = 16
+        before = {k: (p, p.detach().clone()) for k, p in self.backbone.named_parameters()}
+        codec = WanBinoVideoEncoder(native)
+        self.swap(self.backbone, codec)
+        after = dict(self.backbone.named_parameters())
+        for name, (original, value) in before.items():
+            mapped = 'video_encoder._m.' + name[4:] if name.startswith('vae.') else name
+            self.assertIs(after[mapped], original)
+            self.assertTrue(torch.equal(after[mapped], value))
+        self.assertIs(codec._m, native)
+        self.assertEqual(codec.width_factor, 2)
+        self.assertFalse(any(p.requires_grad for p in codec.parameters()))
+
     def test_incompatible_projection_fails_without_mutation(self):
         native = self.backbone.vae
         self.backbone.dit.head.head = nn.Linear(4, 16)
