@@ -1,0 +1,23 @@
+defaults:
+  - midtrain_droid_abc_alpha_wan
+  - _self_
+
+model:
+  video_backbone:
+    encoder:
+      name: wan22_vae_bino
+
+dataloader:
+  datasets:
+    droid:
+      input_mode: stereo
+    abc:
+      input_mode: stereo
+
+training:
+  gradient_accumulation_steps: 2
+  save_steps: 5000
+
+project:
+  wandb:
+    run_name: OpenWAM DROID+ABC Alpha154000 Wan-LR stereo midtrain

@@ -256,12 +256,12 @@ def build_architecture_from_ckpt_dir(ckpt_dir: str, *, weights_required: bool, o
     params = copy.deepcopy(dict(resolved_arch.params))
     replacement_encoder = None
     if (weights_required and override_cfg is not None
-            and OmegaConf.select(model_cfg, 'video_backbone.encoder.name') == 'stereotok'
-            and OmegaConf.select(ckpt_cfg, 'model.video_backbone.encoder.name') != 'stereotok'):
+            and OmegaConf.select(model_cfg, 'video_backbone.encoder.name') in ('stereotok', 'wan22_vae_bino')
+            and OmegaConf.select(ckpt_cfg, 'model.video_backbone.encoder.name') in (None, 'wan22_vae')):
         if (OmegaConf.select(ckpt_cfg, 'model.video_backbone.encoder.name') not in (None, 'wan22_vae')
                 or OmegaConf.select(model_cfg, 'video_backbone.name') != 'wan22_ti2v_5b'
                 or OmegaConf.select(model_cfg, 'video_backbone.from_scratch', default=False)):
-            raise ValueError('StereoTok finetune swap requires native pretrained Wan22 TI2V')
+            raise ValueError('Codec finetune swap requires native pretrained Wan22 TI2V')
         replacement_encoder = OmegaConf.to_container(model_cfg.video_backbone.encoder, resolve=True)
 
     # Pin video_backbone params to a plain dict: OmegaConf would auto-promote
@@ -305,8 +305,13 @@ def build_architecture_from_ckpt_dir(ckpt_dir: str, *, weights_required: bool, o
             import torch
             from openwam.model.video_backbone.encoder import build_video_encoder
             # Frozen codec construction must not perturb the policy/data RNG stream.
-            with torch.random.fork_rng(devices=[]):
-                encoder = build_video_encoder(replacement_encoder)
+            if replacement_encoder['name'] == 'wan22_vae_bino':
+                from openwam.model.video_backbone.encoder.wan22_vae_bino import WanBinoVideoEncoder
+                # Reuse the strictly loaded Alpha VAE, including its exact weights.
+                encoder = WanBinoVideoEncoder(architecture.video_backbone.vae)
+            else:
+                with torch.random.fork_rng(devices=[]):
+                    encoder = build_video_encoder(replacement_encoder)
             _replace_native_wan_codec(architecture.video_backbone, encoder)
         print(f"[{tag}] pretrained weights loaded OK", flush=True)
     return resolved_arch, architecture, ckpt_cfg
