@@ -19,3 +19,13 @@ Completed80 microsteps/10 optimizer updates. Final train loss2.2162 (video0.1441
 Run directory /gpfs/jiuquyun/projects/Frank/openwam-wan-lr-midtrain-20261116/smoke-54803/2026-11-16_00-14-30. checkpoint_step_80.safetensors saved; accel_state_step_80/trainer_state.json verified global_step80,opt_step10. Final export/exit verification pending at time of this entry. Full-state writing takes several minutes on GPFS; account for it separately. Real resume execution has not yet been tested in this run.
 
 User subsequently explicitly requested queueing32 idle GPUs after successful smoke. Existing launcher now accepts formal, requires4 nodes and launches8 ranks/node. Formal uses unchanged one-epoch config/global128, a separate formal output directory and W&B ID owlr32mid20261116. Completed trainer_state.json markers select recovery only within that formal directory. Submit with --nodes=4 --time=2-00:00:00 --requeue and no fixed nodelist, using the supported idle entrypoint; no reservation changes. Resume can roll back to the last completed save after preemption;90-second graceful-save completion is not promised.
+
+## Completion and formal submission receipt
+
+Smoke54803 completed in17m22s, batch and training step exit0; W&B synced. The failed54803.1 step was the separate unit-test invocation missing libGL, not training; corrected unit tests passed in54803.2. Final checkpoint_step_80.safetensors export completed. End validation and complete-state marker verified as above.
+
+Formal source b9d7c5467be477b4db619ed2f54ea7d1b8a3bcbb, clean Frank clone fast-forwarded after smoke exited. bash -n and sbatch-idle --test-only passed. Submitted2026-11-16 00:27:52 CST as job54805 with:
+
+`sbatch-idle --parsable --nodes=4 --time=2-00:00:00 --requeue --job-name=openwam-droid-abc-alpha154000-wan-lr-stereo-midtrain /gpfs/jiuquyun/projects/Frank/OpenWAM-wan-lr-midtrain/scripts/train_h100_alpha_wan_lr.sbatch formal`
+
+Readback:32GPUs,4nodes,128CPUs,3600Gmemory,48h,Requeue1,no fixed nodelist. Initially PENDING/QOSGrpJobsLimit awaiting scheduler synchronization; no formal training progress or W&B initialization yet. Log /gpfs/jiuquyun/home/Frank/logs/openwam-wan-lr-54805.out. Formal output /gpfs/jiuquyun/projects/Frank/openwam-wan-lr-midtrain-20261116/formal. Model card reczz28a0jigxgWp updated to排队中 with SHA,smoke results and JobID. Existing bookings unchanged.
