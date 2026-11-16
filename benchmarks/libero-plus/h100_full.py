@@ -36,8 +36,11 @@ def main():
     spec.loader.exec_module(launcher)
     def client_env(base_env, *, libero_path, config_root, render_gpu):
         key = str(config_root)
-        env = environment(render_gpu, config_root.parent)
-        env.update(LIBERO_PLUS_CONFIG_ROOT=key, LIBERO_CONFIG_PATH=key)
+        # NVIDIA 595.91.07 aborts in EGL readback on full policy trajectories.
+        # Use the verified Mesa path with four raster threads per worker.
+        env = environment(render_gpu, config_root.parent, software_render=True)
+        env.update(LIBERO_PLUS_CONFIG_ROOT=key, LIBERO_CONFIG_PATH=key,
+                   LP_NUM_THREADS='4', PYTHONFAULTHANDLER='1')
         return env
 
     launcher._native_client_env = client_env

@@ -117,3 +117,11 @@ LingBot三份最终checkpoint问题按Object/Goal/LIBERO-10核查：H100既有li
 ## 21:15 GPU 渲染修复
 用户报告全量GPU长期0%。54941容器原缺NVIDIA EGL驱动注入，入口强制Mesa llvmpipe。宿主有595.91.07 EGL库；同一54941分配内overlap定向验证，宿主设置NVIDIA_DRIVER_CAPABILITIES=all后，容器注入libEGL_nvidia及eglcore；MuJoCo枚举8设备，真实GL_RENDERER=NVIDIA H100 80GB HBM3/PCIe/SSE2。仅将full sbatch增加该环境变量、full客户端取消software_render=True。保留模型/协议/seed/全量10030任务、已完成结果及自动恢复，三路均使用GPU渲染。此前Mesa结果保留，渲染后端切换记入运行记录。L20Y FastWAM RGBFT当前3854回合，8worker最近20回合均值13.92–26.05s，不是OpenWAM同模型对照。后续提交与真实吞吐待补。
 硬件渲染环境按每次render_gpu构造，移除仅按config_root缓存的Mesa环境，防止多个worker复用首个GPU绑定。
+21:16提交：d31d6810170d2fcf5bb27959b45fc02ac803ab29已push并在本人远端clone ff-only。旧54941/54942/54943已取消；新Wan54945、RGBFT54946、Stereo54947均8GPU/32CPU/480G/7天/Requeue1、h100:idle，Pending Priority，保留full原输出按task恢复。bash/AST/sbatch test-only通过；真实GPU EGL上下文已验证，新全量吞吐待分配资源。三张原模型卡同步。
+21:42 SIGABRT定位：暂停54945主调度PID124965派发（SIGSTOP，既有子任务继续），原task176单独真实policy重放仍exit=-6。faulthandler日志crash-diagnostic/task176-faulthandler.log显示robosuite read_pixels/mujoco.mjr_readPixels崩溃。FreshStereoEvalEnv使用第二EGL上下文，robosuite.render/read不make_current；最小修复在PlusStereoEvalEnv._images调用前及finally恢复robosuite GL上下文，覆盖reset/set_init_state/step调用。保留图像/噪声/RNG/相机合同，测试补充上下文切换与原RNG配对断言。实际服务已启用DiT cache(0.99)、Wan/MoT compile、SDPA；deploy配置decode_video=false、prompt cache开启，10步去噪约0.1s。原失败任务真实GPU修复重放进行中。
+
+## 22:05 SIGABRT 修复与重复渲染优化
+21:42 的 EGL 上下文恢复候选未修复真实 task176，已撤销该候选。隔离重放、faulthandler 和 native backtrace 证实 NVIDIA 595.91.07 eglcore 在 GL readback/sync 中主动 abort；glFinish、独立 Renderer、RGBA/PBO、关闭驱动线程均未解决，动作与仿真状态有限正常。不能把真实 GL_RENDERER 验证描述为完整评测稳定性。
+正式修复统一 full 客户端使用既有 Mesa llvmpipe，4 raster threads/worker；8 worker 仍用32CPU/8GPU，不新增资源。PlusStereoEvalEnv.step 暂停最终被覆盖的相机 observable，保留 proprio/state 更新，fresh render 一次后让官方 wrapper 对左目施加噪声，右目重放相同 RNG。异常 finally 恢复原 step/camera；不改分辨率、AA、噪声、seed、任务、步数或 checkpoint。保留原131条完成结果，诊断结果仅在 crash-diagnostic，不混入分数。
+真实双目新旧对照：task176、noise=0/1/11/21/31/41、各3步，所有观测逐元素相同、reward/done/state 相同、后续 numpy RNG 相同；parity-fresh.log EXIT0。单步约1.2→0.6s，玻璃噪声约8.2→4.1s。4线程 Mesa 原失败任务完整600步，172.45s 无崩溃（task176-mesa4-fresh.log）；1线程完整策略对照进行中。单元测试覆盖双目噪声 RNG 不额外消耗以及渲染异常恢复，1 test PASS。
+推理实际服务器日志确认 SDPA、Wan/MoT compile、DiT velocity cache threshold=.99；配置 decode_video=false、prompt cache=true、10 denoise steps、8持久服务和动态任务队列保留。真实全量并发吞吐/ETA待重启健康检查；单回合不外推所有噪声类别。

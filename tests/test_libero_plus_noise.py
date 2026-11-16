@@ -16,6 +16,7 @@ class NoiseReplayTest(unittest.TestCase):
                 return getattr(self._wrapped, name)
 
             def _images(self, obs):
+                assert not self._wrapped.env._observables['agentview_image'].is_enabled()
                 return {'agentview_image': np.full((2, 2, 3), 10, np.uint8),
                         'agentview_stereo_right_image': np.full((2, 2, 3), 30, np.uint8)}
 
@@ -29,6 +30,10 @@ class NoiseReplayTest(unittest.TestCase):
         def noise(image, severity):
             return np.asarray(image) + np.random.randint(1, 5, size=np.asarray(image).shape, dtype=np.uint8)
         raw = types.SimpleNamespace(step=lambda action: ({'agentview_image': np.zeros((2, 2, 3), np.uint8)}, 0, False, {}))
+        enabled = {'camera': True}
+        camera = types.SimpleNamespace(is_enabled=lambda: enabled['camera'],
+            set_enabled=lambda value: enabled.update(camera=value))
+        raw._observables = {'agentview_image': camera}
         wrapped = types.SimpleNamespace(env=raw, noise=3, get_sim_state=lambda: np.zeros(4))
         def official(action):
             obs, *rest = raw.step(action)
@@ -46,6 +51,13 @@ class NoiseReplayTest(unittest.TestCase):
             obs, *_ = env.step(None)
         np.testing.assert_array_equal(obs['agentview_stereo_right_image'] - obs['agentview_image'], np.full((2, 2, 3), 20))
         self.assertEqual(np.random.rand(), expected_next)
+        self.assertTrue(enabled['camera'])
+        original_step = raw.step
+        with patch.object(FakeFresh, '_images', side_effect=RuntimeError('render failed')):
+            with self.assertRaisesRegex(RuntimeError, 'render failed'):
+                env.step(None)
+        self.assertTrue(enabled['camera'])
+        self.assertIs(raw.step, original_step)
 
 
 if __name__ == '__main__':
