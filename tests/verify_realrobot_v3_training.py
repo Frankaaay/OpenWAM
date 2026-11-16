@@ -8,6 +8,51 @@ import sys
 from pathlib import Path
 
 
+def test_mug_right_arm_only(tmp_path, monkeypatch):
+    """Exercise the reader with idle-arm offsets, both input modes and history padding."""
+    import numpy as np
+    import torch
+
+    import openwam.dataloader.realrobot_v3 as reader
+
+    states = np.zeros((40, 20), dtype=np.float32)
+    states[:, [3, 7, 13, 17]] = 1  # identity rowRot6D
+    states[:, 10] = np.arange(40) * 0.001
+    states[:, 19] = 0.02
+    np.save(tmp_path / "states.npy", states)
+    stats = dict(state_mean=[0.] * 20, action_mean=[0.] * 20,
+                 state_std=[1e-6] * 10 + [1.] * 10, action_std=[1e-6] * 10 + [1.] * 10)
+    row = dict(states="states.npy", anchors=[0, 2], episode_index=0,
+               instruction="hang the mug", videos={f"{m}_{e}": "unused.mp4"
+               for m in ["head", "left_wrist", "right_wrist"] for e in ["left", "right"]})
+    for task in ["mug_hanging", "cup_stacking", "object_handover"]:
+        (tmp_path / f"{task}-catalog.json").write_text(json.dumps([row]))
+        (tmp_path / f"{task}-stats.json").write_text(json.dumps(stats))
+    monkeypatch.setattr(reader, "frames", lambda *args: np.zeros((17, 2, 2, 3), dtype=np.uint8))
+    for mode in ["mono-left", "stereo"]:
+        mug = reader.V3Dataset("mug_hanging", tmp_path, tmp_path, mode)
+        cup = reader.V3Dataset("cup_stacking", tmp_path, tmp_path, mode)
+        handover = reader.V3Dataset("object_handover", tmp_path, tmp_path, mode)
+        for index in [0, 1]:
+            sample, baseline = mug[index], cup[index]
+            for key in ["action", "proprio", "action_mask", "proprio_mask"]:
+                assert not sample[key][..., :10].any()
+                assert torch.equal(sample[key][..., 10:], baseline[key][..., 10:])
+                assert torch.equal(handover[index][key], baseline[key])
+            valid = torch.arange(34) >= (1 if index == 0 else 0)
+            assert torch.equal(sample["action_mask"][:, 34:44], valid[:, None].expand(-1, 10))
+            assert sample["proprio_mask"][..., 34:44].all()
+            assert (sample["right_video"] is not None) == (mode == "stereo")
+            assert sample["prompt"] == baseline["prompt"]
+        before = mug[0]
+        # A different parked left pose/gripper must not change model inputs or right targets.
+        mug.cache[0][:, :3] += 0.005
+        mug.cache[0][:, 9] = 0.001
+        after = mug[0]
+        for key in ["proprio", "action", "proprio_mask", "action_mask"]:
+            assert torch.equal(before[key], after[key])
+
+
 def main():
     # Direct execution otherwise puts tests/dataloader ahead of Orion's dataloader.
     sys.path[0] = str(Path(__file__).resolve().parents[1])

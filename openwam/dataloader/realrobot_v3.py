@@ -96,6 +96,13 @@ class V3Dataset(BaseDataset):
         action = (action - self.tensors["action_mean"]) / self.tensors["action_std"]
         action, am = scatter80(action, valid[:, None].expand(-1, 20))
         state, sm = scatter80(state, torch.ones_like(state, dtype=torch.bool))
+        if self.task == "mug_hanging":
+            # The idle left arm contains sensor jitter, not task supervision.
+            # Explicitly zero state: the model reduces proprio_mask to a token mask.
+            state[..., :10] = 0
+            action[..., :10] = 0
+            sm[..., :10] = False
+            am[..., :10] = False
         views = {}
         for eye in ["left", "right"] if self.mode == "stereo" else ["left"]:
             views[eye] = mosaic(

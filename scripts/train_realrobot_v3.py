@@ -47,6 +47,11 @@ def main():
     if args.auto_resume and (base / "result.json").exists():
         result = json.loads((base / "result.json").read_text())
         assert result["status"] == "complete" and result["model"] == model and result["task"] == task
+        if task == "mug_hanging":
+            previous_contract = json.loads((pathlib.Path(result["output"]) / "data-contract.json").read_text())
+            assert previous_contract.get("active_arms") == "right", (
+                "Old bimanual mug run: use a new output directory and initialize from midtrain50101"
+            )
         print("ALREADY_COMPLETE", json.dumps(result), flush=True)
         return
     assert json.load(open(PREP / "result.json"))["status"] == "passed"
@@ -139,6 +144,8 @@ def main():
         persistent_workers=True,
         zero_stage=2,
     )
+    if task == "mug_hanging":
+        contract["active_arms"] = "right"
     if args.auto_resume and (base / "active-output.json").exists():
         from openwam.train.utils.checkpointing import find_latest_accel_state
 
