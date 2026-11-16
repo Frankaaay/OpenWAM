@@ -34,15 +34,11 @@ def main():
     spec = importlib.util.spec_from_file_location('full_launcher', REPO / 'benchmarks/libero-plus/run_all_suites.py')
     launcher = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(launcher)
-    client_envs = {}
-
     def client_env(base_env, *, libero_path, config_root, render_gpu):
         key = str(config_root)
-        if key not in client_envs:
-            env = environment(render_gpu, config_root.parent)
-            env.update(LIBERO_PLUS_CONFIG_ROOT=key, LIBERO_CONFIG_PATH=key)
-            client_envs[key] = env
-        return dict(client_envs[key])
+        env = environment(render_gpu, config_root.parent)
+        env.update(LIBERO_PLUS_CONFIG_ROOT=key, LIBERO_CONFIG_PATH=key)
+        return env
 
     launcher._native_client_env = client_env
     from openwam.dataloader.utils.normalization import materialize_eef_stats

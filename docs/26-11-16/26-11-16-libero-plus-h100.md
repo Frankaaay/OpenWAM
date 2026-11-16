@@ -116,3 +116,4 @@ LingBot三份最终checkpoint问题按Object/Goal/LIBERO-10核查：H100既有li
 
 ## 21:15 GPU 渲染修复
 用户报告全量GPU长期0%。54941容器原缺NVIDIA EGL驱动注入，入口强制Mesa llvmpipe。宿主有595.91.07 EGL库；同一54941分配内overlap定向验证，宿主设置NVIDIA_DRIVER_CAPABILITIES=all后，容器注入libEGL_nvidia及eglcore；MuJoCo枚举8设备，真实GL_RENDERER=NVIDIA H100 80GB HBM3/PCIe/SSE2。仅将full sbatch增加该环境变量、full客户端取消software_render=True。保留模型/协议/seed/全量10030任务、已完成结果及自动恢复，三路均使用GPU渲染。此前Mesa结果保留，渲染后端切换记入运行记录。L20Y FastWAM RGBFT当前3854回合，8worker最近20回合均值13.92–26.05s，不是OpenWAM同模型对照。后续提交与真实吞吐待补。
+硬件渲染环境按每次render_gpu构造，移除仅按config_root缓存的Mesa环境，防止多个worker复用首个GPU绑定。
