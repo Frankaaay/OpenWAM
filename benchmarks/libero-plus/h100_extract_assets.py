@@ -47,5 +47,9 @@ with zipfile.ZipFile(archive) as z:
     batch=[];batch_bytes=0
   list(pool.map(write,batch));done+=len(batch)
 report=dict(complete=True,archive_sha256=h.hexdigest(),files=len(files),directories=len(dirs),bytes=sum(x.file_size for x,_ in files),seconds=time.monotonic()-start)
+assert report['files']==448799 and report['bytes']==8953192654,report
+link=Path('/gpfs/jiuquyun/projects/Frank/openwam-libero-plus-20261116/plus/libero/libero/assets')
+if not link.is_symlink():link.symlink_to(target,target_is_directory=True)
+assert link.resolve()==target.resolve()
 (root/'ready.json').write_text(json.dumps(report,indent=2))
 print('PLUS_ASSETS_READY',json.dumps(report),flush=True)

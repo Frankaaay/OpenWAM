@@ -33,7 +33,7 @@ H100 根：`/gpfs/jiuquyun/projects/Frank/openwam-libero-plus-20261116`。
 - Python编译检查及 `git diff --check`：通过。上述不是 GPU/真环境验收。
 - CPU资产传输 Job54853：已运行；目的地 `frank/`，rsync partial/append-verify，原文件保留。
 - CPU依赖 Job54855：失败，复用环境没有 pip；用宿主 uv 安装至独立 target，Job54857 成功。没有修改原有环境。
-- CPU环境导入检查、完整资产哈希/解压及两组8卡有限验收尚待完成。GPU ETA 必须来自本次实测；交接文档 FastWAM 耗时不能直接套用 OpenWAM。
+- CPU环境导入检查已通过；完整资产哈希/解压及两组8卡有限验收尚待完成。GPU ETA 必须来自本次实测；交接文档 FastWAM 耗时不能直接套用 OpenWAM。
 
 日志位于 `/gpfs/jiuquyun/home/Frank/logs/`；后续 JobID、SHA、导入路径及验收结果在本文件和运行根 run-receipt.md 回填。
 
@@ -43,3 +43,5 @@ H100 根：`/gpfs/jiuquyun/projects/Frank/openwam-libero-plus-20261116`。
 - 镜像实际为 Ubuntu24.04，client numpy1.26.4。MagickWand缺失，CPU Job54859/54860 分别暴露 apt缓存缺失/阿里云内网镜像502；使用本任务独立 apt lists/sources 下载 Ubuntu 官方软件包，Job54861/54862 成功解包到任务 `system-libs/prefix`，不改系统或原环境。
 - 下载 libmagickwand-6.q16-7t64、libmagickcore-6.q16-7t64、liblqr-1-0、libfftw3-double3、liblcms2-2、imagemagick-6-common；设置独立库、coder/config路径，并为 Wand 的查找方式补无版本 `.so` 链接。实际 PNG/运动模糊 CPU 验证另行记录。
 - 验收增加原训练 EEF normalization 与部署 materialize 逐值相等检查；Plus默认图像变换同步为 fresh renderer 对应的 none。
+- Job54867：`WAND_PNG_MOTION_BLUR_OK 0.24.0`、`CLIENT_IMPORT_OK 3.3.2`。Pyxis会以镜像默认值覆盖宿主LD_LIBRARY_PATH，因此验证改为容器内显式设置；正式worker本来就在容器内通过subprocess env设置同一完整路径。
+- 准备入口 `h100_prepare.sbatch` 依赖传输成功，校验zip SHA/CRC、448799文件和8953192654bytes，完成官方assets软链接后生成ready.json，再记录两份模型SHA256。两组8卡验收顺序依赖，最多同时占8卡；任一阶段失败不会自动进入下一阶段。
