@@ -51,7 +51,7 @@ def selection(classification):
     return tasks
 
 
-def environment(rank, out, server=False):
+def environment(rank, out, server=False, software_render=False):
     libs = BASE / 'envs/system-libs/prefix/usr/lib/x86_64-linux-gnu'
     python = SERVER if server else CLIENT
     paths = [REPO, REPO / 'third_party', PROJECTS / 'FastWAM-libero-eval-v2-20261019/src'] if server else [
@@ -59,7 +59,7 @@ def environment(rank, out, server=False):
         RUNTIME / 'frank/runs/libero-six-eval-20261022/client-deps',
         PROJECTS / 'libero-eval-20261022',
         PROJECTS / 'libero-eval-20261022/XPolicyLab/policy/LingBot_VA/lingbot_va']
-    return dict(os.environ, PYTHONPATH=':'.join(map(str, paths)),
+    env = dict(os.environ, PYTHONPATH=':'.join(map(str, paths)),
         CUDA_VISIBLE_DEVICES=str(rank), MUJOCO_EGL_DEVICE_ID=str(rank),
         MUJOCO_GL='egl', PYOPENGL_PLATFORM='egl',
         LIBERO_PLUS_PATH=str(ROOT / 'plus'), LIBERO_PLUS_CONFIG_ROOT=str(out / 'libero-config'),
@@ -74,6 +74,18 @@ def environment(rank, out, server=False):
             libs, libs / 'pulseaudio'])) + ':' + os.environ.get('LD_LIBRARY_PATH', ''),
         __EGL_VENDOR_LIBRARY_FILENAMES=str(BASE / 'envs/system-libs/nvidia-egl-vendor.json'),
         PATH=str(BASE / 'envs/system-libs/prefix/usr/bin') + ':' + os.environ['PATH'])
+    if software_render:
+        assert not server
+        env.update(__EGL_VENDOR_LIBRARY_FILENAMES=str(BASE / 'envs/system-libs/prefix/usr/share/glvnd/egl_vendor.d/50_mesa.json'),
+            LIBGL_ALWAYS_SOFTWARE='1', GALLIUM_DRIVER='llvmpipe', LP_NUM_THREADS='1',
+            LIBGL_DRIVERS_PATH=str(libs / 'dri'), CUDA_VISIBLE_DEVICES='')
+        env.pop('MUJOCO_EGL_DEVICE_ID', None)
+        probe = "from mujoco.egl import egl_ext as E\nfrom OpenGL import error\nfor i,d in enumerate(E.eglQueryDevicesEXT()):\n try:\n  p=E.eglGetPlatformDisplayEXT(E.EGL_PLATFORM_DEVICE_EXT,d,None)\n  if E.eglInitialize(p,None,None):\n   print(i);E.eglTerminate(p);break\n except error.GLError:pass\nelse:raise RuntimeError('No usable Mesa EGL device')"
+        device = subprocess.check_output([str(CLIENT), '-c', probe], env=env, text=True).strip()
+        assert device.isdigit(), device
+        env['MUJOCO_EGL_DEVICE_ID'] = device
+        print('MESA_EGL_DEVICE', device, flush=True)
+    return env
 
 
 def worker(variant, rank, run):
@@ -84,6 +96,8 @@ def worker(variant, rank, run):
     stereo = variant == 'stereotok'
     train = ROOT / 'frank/runs/eighteen-preparation-20261014/twelve-ready-u15853'
     checkpoint = train / ('train-openwam-libero-' + variant) / ('2026-10-21_22-24-28' if stereo else '2026-10-21_14-00-22')
+    if variant == 'wan-rgbft':
+        checkpoint = RUNTIME.parent / 'train-openwam-libero-rgbft/2026-11-13_15-24-40'
     weight = checkpoint / 'checkpoint_step_13230.safetensors'
     assert weight.stat().st_size == (28010055404 if stereo else 24813767464)
     original = yaml.safe_load((checkpoint / 'config.yaml').read_text())
@@ -93,6 +107,9 @@ def worker(variant, rank, run):
         current = out / f'{suite}-{task_id}'
         current.mkdir()
         cfg = copy.deepcopy(original)
+        if variant == 'wan-rgbft':
+            cfg['model']['video_backbone']['model_path'] = str(RUNTIME / 'assets/openwam')
+            cfg['model']['video_backbone']['encoder']['model_path'] = str(RUNTIME / 'assets/openwam')
         datasets = [d for d in cfg['dataloader']['datasets'] if '/' + suite + '/' in d['dataset_dir']]
         assert len(datasets) == 1
         cfg['dataloader'] = datasets[0]
@@ -113,10 +130,13 @@ def worker(variant, rank, run):
         bundle = current / 'checkpoint'
         bundle.mkdir()
         links = [(weight.name, weight), ('tokenizer', checkpoint / 'tokenizer'), ('normalization_stats.npy', stats)]
+        if variant == 'wan-rgbft':
+            links[1] = ('tokenizer/google', RUNTIME / 'assets/openwam/google')
         if stereo:
             links.append(('stereotok.json', checkpoint / 'stereotok.json'))
         for link, target in links:
             assert target.exists(), target
+            (bundle / link).parent.mkdir(parents=True, exist_ok=True)
             (bundle / link).symlink_to(target)
         (bundle / 'config.yaml').write_text(yaml.safe_dump(cfg))
         client = yaml.safe_load((REPO / 'benchmarks/libero/policy_config.yml').read_text())
@@ -136,12 +156,13 @@ def worker(variant, rank, run):
                     time.sleep(2)
                 with (current / 'client.log').open('w') as clog:
                     subprocess.run([str(CLIENT), str(REPO / 'benchmarks/libero-plus/single_eval.py'),
-                        '--config', str(current / 'client.yaml')], env=environment(rank, out), cwd=REPO,
+                        '--config', str(current / 'client.yaml')], env=environment(rank, out, software_render=variant == 'wan-rgbft'), cwd=REPO,
                         stdout=clog, stderr=subprocess.STDOUT, check=True, timeout=5400)
                 result = json.loads((current / 'results.json').read_text())
                 assert result['task'] == name and len(result['trials']) == 1
                 assert 'PLUS_RENDER_VERIFIED' in (current / 'client.log').read_text()
                 result.update(category=category, seconds=time.monotonic() - started,
+                              checkpoint=str(weight), variant=variant,
                               stats_sha256=hashlib.sha256(stats.read_bytes()).hexdigest())
                 results.append(result)
                 (out / 'episodes.json').write_text(json.dumps(results, indent=2))
@@ -158,7 +179,7 @@ def worker(variant, rank, run):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('variant', choices=['wan', 'stereotok'])
+    parser.add_argument('variant', choices=['wan', 'stereotok', 'wan-rgbft'])
     parser.add_argument('--rank', type=int, choices=range(8))
     parser.add_argument('--run', type=Path, required=True)
     args = parser.parse_args()

@@ -13,7 +13,7 @@ set -euo pipefail
 variant=${1:?wan or stereotok}
 expected_sha=${2:?published OpenWAM SHA}
 R=/gpfs/jiuquyun/projects/Frank/openwam-libero-plus-20261116
-O=$R/OpenWAM
+O=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 M=/gpfs/jiuquyun/projects/Frank/robotwin-h100-migration-20261101
 E=/gpfs/jiuquyun/projects/Frank/libero-rgbft-ppu15-20261114/eval-runtime
 test "$(git -C "$O" rev-parse HEAD)" = "$expected_sha"

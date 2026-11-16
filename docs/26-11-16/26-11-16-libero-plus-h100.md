@@ -45,3 +45,38 @@ H100 根：`/gpfs/jiuquyun/projects/Frank/openwam-libero-plus-20261116`。
 - 验收增加原训练 EEF normalization 与部署 materialize 逐值相等检查；Plus默认图像变换同步为 fresh renderer 对应的 none。
 - Job54867：`WAND_PNG_MOTION_BLUR_OK 0.24.0`、`CLIENT_IMPORT_OK 3.3.2`。Pyxis会以镜像默认值覆盖宿主LD_LIBRARY_PATH，因此验证改为容器内显式设置；正式worker本来就在容器内通过subprocess env设置同一完整路径。
 - 准备入口 `h100_prepare.sbatch` 依赖传输成功，校验zip SHA/CRC、448799文件和8953192654bytes，完成官方assets软链接后生成ready.json，再记录两份模型SHA256。两组8卡验收顺序依赖，最多同时占8卡；任一阶段失败不会自动进入下一阶段。
+
+## 13:25 提交回执
+
+执行源码固定为 `3ca4f0613233f194e861e344591953f565ccf0a5`；H100本人clean clone已fetch/ff-only同步，状态干净。CPU原生入口检查Job54868成功：14项选择、client/server --help、噪声配对/RNG单测全部通过。
+
+| 阶段 | Job | 实时状态 |
+|---|---|---|
+| 资产传输 | 54853 | RUNNING，约6.25GB/59GB，最近约3.4–4.2MB/s |
+| 哈希校验/解压 | 54870 | PENDING，afterok:54853 |
+| 原版Wan，8卡14回合 | 54872 | PENDING，afterok:54870 |
+| StereoTok，8卡14回合 | 54874 | PENDING，afterok:54872 |
+
+GPU任务均已核实 `AdminComment=h100:idle`、`Requeue=0`、TimeLimit04:00:00、未分配节点/GPU；无新预约。脚本bash检查及sbatch --test-only通过，但不能据此宣称GPU接入已经跑通。传输剩余约3.5–4小时；解压/排队/实际GPU耗时另计，StartTime当前Unknown。
+
+结果目录分别为运行根 `acceptance/wan-54872`、`acceptance/stereotok-54874`；日志为 `logs/openwam-libero-plus-wan-u13230-eval-54872.out`、`logs/openwam-libero-plus-stereotok-u13230-eval-54874.out`（日志根 `/gpfs/jiuquyun/home/Frank`）。最终每组应有14回合且acceptance.json.complete=true，当前尚未产生。
+
+模型卡已回填；没有正式分数或全量任务。本人临时0GPU传输DSW `dsw-1a0plk4ipgycdyvy40` 仍用于54853，传输完成后应停止，当前不能中断。此提交回执保留为本地未提交文档更新，避免改变已锁定的运行SHA。
+
+## 13:36 历史权重反查与传输提速
+
+用户要求复查H100历史LIBERO权重，缺失才提速传输。核对Frank从10月1日以来Slurm LIBERO作业、历史54735日志实际OPEN_SUITE_BOUND、原始迁移记录和本人既有checkpoint/runtime目录：此前七卡54735–54741用的是 `libero-rgbft-ppu15-20261114/train-openwam-libero-rgbft/2026-11-13_15-24-40/checkpoint_step_13230.safetensors`（24,813,767,464 bytes），属于RGBFT；不能作为本次原版Wan替代。未找到此次原版Wan及StereoTok的可复用完整LIBERO权重。此前只查两个runtime目录，查找依据不足；本轮补了实际历史作业反查。
+
+传输改为同一CPU额度内三路rsync（Wan、StereoTok、Plus资产），文件清单互不重叠；保留partial/append-verify。新Job54878依赖afterany:54853，先将准备Job54870改为afterok:54878，再取消旧54853，避免并发写相同文件。旧任务已退出，约8.3GB已传StereoTok数据续传，没有重头下载或删除文件。两项GPU任务54872/54874及固定源码SHA不变。
+
+115.89秒实际文件大小增量测速（排除已有partial计数）：Wan3.379MB/s、StereoTok2.927MB/s、资产2.807MB/s，合计9.114MB/s；原单路约3–4MB/s。按各流当前剩余量/实测速率，Wan约1.99h、StereoTok1.82h、资产0.58h，主体传输ETA约2小时，不含校验解压和GPU排队/验收。此为约2分钟窗口，不保证持续峰值。
+
+运维脚本本机 `C:/Users/Frank/AppData/Local/Temp/openwam-plus-transfer/transfer-parallel.py` 和 `transfer-parallel.sbatch`，H100放在本次运行根；Python语法、bash语法和sbatch test-only已通过。Python脚本本地/远端SHA256均 `ff70f38dd87eafa0ce0db774780e673bf6fedd3cdd60618ce11beec49a877b64`。`jobs.json`保留previous_transfer=54853并更新transfer=54878；当前仍使用原0GPU DSW做传输源，完成后再停止。
+
+## Wan RGBFT 追加请求
+
+用户授权优先用H100已有Wan RGBFT跑LIBERO-Plus，预约8卡，短预约结束后允许按闲时继续。新增wan-rgbft变体只引用现有24.81GB checkpoint和既有assets/openwam，不重复传输权重。复用先前RGBFT H100验证过的Mesa llvmpipe、LP_NUM_THREADS=1和设备探测；模型仍在GPU推理。Plus官方noise依赖原始image observable，故不复制原普通LIBERO禁用image observable的优化，避免破坏噪声重放口径。
+
+当前0050/0054/0062预约表短空档已被本人32卡midtrain54805实际占用，抢任意一台会重排整项训练；不改变现役midtrain。首个无预约冲突的8卡节点0049为11月17日00:00起，计划预约00:00–04:00，作业4h上限与预约保护独立，到期可继续idle。仍先做14回合接入验收，尚未提交10030回合全量评测。
+
+RGBFT使用独立本人clean clone OpenWAM-rgbft；保留原两项排队任务的3ca4f06源码与checkpoint身份不变。新变体按suite复用同一native EEF10统计、固定相同14变体及seed42，输出明确记录variant与实际checkpoint绝对路径。
