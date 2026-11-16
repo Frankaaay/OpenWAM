@@ -99,3 +99,9 @@ LingBot三份最终checkpoint问题按Object/Goal/LIBERO-10核查：H100既有li
 
 ## 闲时评测启动修复
 原Wan54872在主worker导入normalization/OpenCV时缺少libGL.so.1；RGBFT54884因Slurm暂存脚本路径推导仓库而报not a git repository；Stereo54874被失败依赖阻塞。仅修改h100_acceptance.sbatch：明确使用本人OpenWAM-rgbft clone，并在容器内启动Python前设置既有系统库路径，使主worker和子进程均继承。三变体统一使用同一已发布修复SHA，权重/14回合/seed42不变，保留失败日志。bash语法检查通过；真实容器导入验证及重新排队待补。
+
+### 修复后重新排队
+修复commit12fff2eaf1d7a514fb16cd102fd9cd088150961f已push，H100 OpenWAM-rgbft clean clone已fetch/ff-only。实际同镜像/挂载/容器内LD_LIBRARY_PATH/仓库检查的CPU预检54918完成0:0，cv2与materialize_eef_stats导入通过。GPU脚本bash和sbatch test-only通过。取消原DependencyNeverSatisfied的54874；新Wan54920、RGBFT54921、StereoTok54922，每组8GPU/4h/no-requeue，无预约、最多同时8GPU，afterany串行避免单组失败永久阻塞后续独立评测。18:48实时Wan为PENDING Priority，后两组PENDING Dependency，Wan AdminComment=h100:idle。三张原模型卡已追加故障/修复/新Job与SHA，GPU rollout尚未开始，未宣称闭环通过。未影响midtrain和DROID恢复。
+
+## 19:35 后续运行错误和重排修复
+54921 RGBFT已完成14回合；54920 Wan在NVIDIA EGL无设备时报错，54922 Stereo因无条件导入旧FastWAM不存在的MetricHead报错，均非抢占。用户要求闲时抢占自动重排：改--requeue并在输出路径加入SLURM_RESTART_COUNT，重启从头验收且保留上次结果，避免同Job目录存在立即失败。Wan/Stereo复用RGBFT已验证Mesa渲染；MetricHead仅在geometry.metric_disparity.shallow_head_weight>0时导入，当前checkpoint无该项，不改变模块/权重合同。AST/bash检查通过。未重跑已完成RGBFT。

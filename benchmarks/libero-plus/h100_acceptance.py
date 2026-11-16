@@ -156,7 +156,7 @@ def worker(variant, rank, run):
                     time.sleep(2)
                 with (current / 'client.log').open('w') as clog:
                     subprocess.run([str(CLIENT), str(REPO / 'benchmarks/libero-plus/single_eval.py'),
-                        '--config', str(current / 'client.yaml')], env=environment(rank, out, software_render=variant == 'wan-rgbft'), cwd=REPO,
+                        '--config', str(current / 'client.yaml')], env=environment(rank, out, software_render=True), cwd=REPO,
                         stdout=clog, stderr=subprocess.STDOUT, check=True, timeout=5400)
                 result = json.loads((current / 'results.json').read_text())
                 assert result['task'] == name and len(result['trials']) == 1

@@ -72,7 +72,7 @@ class StereoTokVideoEncoder(VideoEncoder):
     @classmethod
     def from_skeleton(cls, components_entry, *, device="cpu", encoder_cfg=None, ckpt_dir=None):
         from fastwam.models.wan22.stereotok.checkpoints import DECODER_ARCHITECTURE
-        from fastwam.models.wan22.stereotok.student import GeometryDecoder, LAS2GuidedFusion, MetricHead, make_vae
+        from fastwam.models.wan22.stereotok.student import GeometryDecoder, LAS2GuidedFusion, make_vae
         from fastwam.models.wan22.stereotok_vae import StereoTokVAE
 
         if ckpt_dir is None:
@@ -96,6 +96,7 @@ class StereoTokVideoEncoder(VideoEncoder):
             model = make_vae()
             model.decoder.geometry_branch = GeometryDecoder(model.decoder)
             if geometry.get("metric_disparity", {}).get("shallow_head_weight", 0) > 0:
+                from fastwam.models.wan22.stereotok.student import MetricHead
                 model.metric_head = MetricHead()
         # timm's FasterNet constructor reads its drop-path schedule via item(),
         # which requires real CPU tensors. Strict checkpoint loading below still

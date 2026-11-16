@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=480G
 #SBATCH --time=04:00:00
-#SBATCH --no-requeue
+#SBATCH --requeue
 #SBATCH --output=/gpfs/jiuquyun/home/Frank/logs/%x-%j.out
 set -euo pipefail
 variant=${1:?wan or stereotok}
@@ -30,5 +30,5 @@ srun --container-image="$M/source-runtime.sqsh" --container-mounts="$mounts" bas
   libs=/mnt/workdir/frank/envs/system-libs/prefix/usr/lib/x86_64-linux-gnu
   export LD_LIBRARY_PATH="$libs:$libs/pulseaudio:${LD_LIBRARY_PATH:-}"
   exec /mnt/workdir/frank/envs/openwam-baselines-20261014/bin/python \
-    "$O/benchmarks/libero-plus/h100_acceptance.py" "$1" --run "$R/acceptance/$1-$SLURM_JOB_ID"
+    "$O/benchmarks/libero-plus/h100_acceptance.py" "$1" --run "$R/acceptance/$1-$SLURM_JOB_ID-attempt${SLURM_RESTART_COUNT:-0}"
 ' bash "$variant"
