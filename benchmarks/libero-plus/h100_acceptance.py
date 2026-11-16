@@ -16,6 +16,7 @@ SUITES = ['libero_spatial', 'libero_object', 'libero_goal', 'libero_10']
 ROOT = Path('/gpfs/jiuquyun/projects/Frank/openwam-libero-plus-20261116')
 RUNTIME = Path('/gpfs/jiuquyun/projects/Frank/libero-rgbft-ppu15-20261114/eval-runtime')
 REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO))
 BASE = Path('/mnt/workdir/frank')
 CLIENT = BASE / 'envs/fastwam-baselines-20261014/bin/python'
 SERVER = BASE / 'envs/openwam-baselines-20261014/bin/python'
@@ -65,8 +66,11 @@ def environment(rank, out, server=False):
         PYTHONDONTWRITEBYTECODE='1', PYTHONUNBUFFERED='1', OMP_NUM_THREADS='1',
         MKL_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', TOKENIZERS_PARALLELISM='false',
         DIFFSYNTH_SKIP_DOWNLOAD='true', WANDB_MODE='disabled',
+        MAGICK_HOME=str(ROOT / 'system-libs/prefix/usr'),
+        MAGICK_CONFIGURE_PATH=str(ROOT / 'system-libs/prefix/etc/ImageMagick-6'),
+        MAGICK_CODER_MODULE_PATH=str(ROOT / 'system-libs/prefix/usr/lib/x86_64-linux-gnu/ImageMagick-6.9.12/modules-Q16/coders'),
         TRITON_CACHE_DIR=str(out / 'triton'), TORCHINDUCTOR_CACHE_DIR=str(out / 'inductor'),
-        LD_LIBRARY_PATH=':'.join(map(str, [python.parent.parent / 'lib/python3.12/site-packages/torch/lib',
+        LD_LIBRARY_PATH=':'.join(map(str, [ROOT / 'system-libs/prefix/usr/lib/x86_64-linux-gnu', python.parent.parent / 'lib/python3.12/site-packages/torch/lib',
             libs, libs / 'pulseaudio'])) + ':' + os.environ.get('LD_LIBRARY_PATH', ''),
         __EGL_VENDOR_LIBRARY_FILENAMES=str(BASE / 'envs/system-libs/nvidia-egl-vendor.json'),
         PATH=str(BASE / 'envs/system-libs/prefix/usr/bin') + ':' + os.environ['PATH'])
@@ -96,12 +100,16 @@ def worker(variant, rank, run):
         assert datasets[0]['normalize_mode'] == 'min-max'
         stats = Path(datasets[0].get('normalization_stats_path') or str(Path(datasets[0]['dataset_dir']) / 'meta/libero_normalization_stats.npy'))
         raw = np.load(stats, allow_pickle=True).item()
+        from openwam.dataloader.utils.normalization import materialize_eef_stats
         for key in ['eef', 'eef_state']:
             assert raw[key]['gripper_convention'] == 'minus1_closed_plus1_open'
             assert raw[key]['representation'] == 'native_delta_eef10'
+            materialized = materialize_eef_stats(dict(raw[key]), 'min-max', dim=10,
+                strict_minmax=False, force_rot6d_identity=True)
             for field in ['min', 'max']:
                 assert np.asarray(raw[key][field]).shape == (10,)
                 assert np.isfinite(raw[key][field]).all()
+                np.testing.assert_array_equal(np.asarray(raw[key][field], dtype=np.float32), materialized[field])
         bundle = current / 'checkpoint'
         bundle.mkdir()
         links = [(weight.name, weight), ('tokenizer', checkpoint / 'tokenizer'), ('normalization_stats.npy', stats)]

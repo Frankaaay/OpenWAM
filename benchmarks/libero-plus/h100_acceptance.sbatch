@@ -18,6 +18,8 @@ M=/gpfs/jiuquyun/projects/Frank/robotwin-h100-migration-20261101
 E=/gpfs/jiuquyun/projects/Frank/libero-rgbft-ppu15-20261114/eval-runtime
 test "$(git -C "$O" rev-parse HEAD)" = "$expected_sha"
 test -z "$(git -C "$O" status --porcelain)"
+test "$(git -C "$R/plus" rev-parse HEAD)" = 4976dc30028e805ff8094b55501d532c48fec182
+git -C "$R/plus" diff --exit-code HEAD
 test "$(git -C "$E/frank/projects/libero-eval-20261022/XPolicyLab" rev-parse HEAD)" = 56a66e1a083edd80abaada9bc95e5a4e99ff9de5
 test "$(git -C "$E/frank/projects/FastWAM-libero-eval-v2-20261019" rev-parse HEAD)" = b771fd55d0133576481dc52f867792a649fafc07
 export PYTHONDONTWRITEBYTECODE=1

@@ -172,7 +172,7 @@ def run_eval(cfg: dict) -> int:
         head_camera_key=cfg.get("head_camera_key", "agentview_image"),
         left_wrist_camera_key=cfg.get("left_wrist_camera_key", "robot0_eye_in_hand_image"),
         right_wrist_camera_key=cfg.get("right_wrist_camera_key"),
-        image_transform=cfg.get("image_transform", "rotate_180"),
+        image_transform=cfg.get("image_transform", "none"),
         send_state=_require_bool(cfg.get("send_state", True), "send_state"),
         state_dim=int(cfg.get("state_dim", 10)),
         action_dim=7,

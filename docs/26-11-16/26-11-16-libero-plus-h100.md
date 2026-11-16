@@ -36,3 +36,10 @@ H100 根：`/gpfs/jiuquyun/projects/Frank/openwam-libero-plus-20261116`。
 - CPU环境导入检查、完整资产哈希/解压及两组8卡有限验收尚待完成。GPU ETA 必须来自本次实测；交接文档 FastWAM 耗时不能直接套用 OpenWAM。
 
 日志位于 `/gpfs/jiuquyun/home/Frank/logs/`；后续 JobID、SHA、导入路径及验收结果在本文件和运行根 run-receipt.md 回填。
+
+## 环境适配补充
+
+- 2026-11-16：初次提交 `cc03c8f449a25dbaf5daf37f0e85f7bf9d13ee13`。模型卡：Wan `reczz28aEJvlFLdl`、StereoTok `reczz28aEJvlGER6`。
+- 镜像实际为 Ubuntu24.04，client numpy1.26.4。MagickWand缺失，CPU Job54859/54860 分别暴露 apt缓存缺失/阿里云内网镜像502；使用本任务独立 apt lists/sources 下载 Ubuntu 官方软件包，Job54861/54862 成功解包到任务 `system-libs/prefix`，不改系统或原环境。
+- 下载 libmagickwand-6.q16-7t64、libmagickcore-6.q16-7t64、liblqr-1-0、libfftw3-double3、liblcms2-2、imagemagick-6-common；设置独立库、coder/config路径，并为 Wand 的查找方式补无版本 `.so` 链接。实际 PNG/运动模糊 CPU 验证另行记录。
+- 验收增加原训练 EEF normalization 与部署 materialize 逐值相等检查；Plus默认图像变换同步为 fresh renderer 对应的 none。
