@@ -110,3 +110,9 @@ LingBot三份最终checkpoint问题按Object/Goal/LIBERO-10核查：H100既有li
 
 ## 用户要求直接全量
 三组直接全量，停止14回合阶段。新增必要H100全量绑定h100_full.py/h100_full.sbatch，复用run_all_suites原动态队列/协议签名/结果断点续跑，不新造调度器。官方10030任务/四suite，每任务1trial、seed10000、official_global、settle30、600/700steps，三模型30090回合；seed42验收不混入。每组8GPU/1server per GPU、独立闲时队列/Requeue1、7天上限、稳定输出full/{variant}以完成任务为断点。每suite独立绑定原native EEF10统计，复用Mesa渲染、原推理优化和精确权重。静态AST/bash通过，真实CPU全任务dry-run待补；不再提交GPU接入验收。
+
+### 全量提交回执
+部署SHA bfde7882997372c1a3f42a60528a512f7995970d。三组CPU dry-run54937/54938/54939全部输出FULL_DRY_RUN_COMPLETE，每组4suite完整枚举及官方协议检查通过，没有GPU验收回合。全量Wan54941、RGBFT54942、Stereo54943已独立提交，各8GPU/32CPU/480G/7天/Requeue1，均PENDING Priority，无预约/无Dependency、h100:idle。稳定输出为运行根full/wan、full/wan-rgbft、full/stereotok，原scheduler协议签名校验后跳过完成task；不使用attempt全量重跑。三张原模型卡已回填全量范围/Job/SHA。尚无全量GPU启动健康或最终分数，不提供排队ETA。midtrain、DROID恢复和checkpoint传输未改动。
+
+## 21:15 GPU 渲染修复
+用户报告全量GPU长期0%。54941容器原缺NVIDIA EGL驱动注入，入口强制Mesa llvmpipe。宿主有595.91.07 EGL库；同一54941分配内overlap定向验证，宿主设置NVIDIA_DRIVER_CAPABILITIES=all后，容器注入libEGL_nvidia及eglcore；MuJoCo枚举8设备，真实GL_RENDERER=NVIDIA H100 80GB HBM3/PCIe/SSE2。仅将full sbatch增加该环境变量、full客户端取消software_render=True。保留模型/协议/seed/全量10030任务、已完成结果及自动恢复，三路均使用GPU渲染。此前Mesa结果保留，渲染后端切换记入运行记录。L20Y FastWAM RGBFT当前3854回合，8worker最近20回合均值13.92–26.05s，不是OpenWAM同模型对照。后续提交与真实吞吐待补。

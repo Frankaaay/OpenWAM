@@ -25,6 +25,8 @@ test "$(git -C "$E/frank/projects/FastWAM-libero-eval-v2-20261019" rev-parse HEA
 export PYTHONDONTWRITEBYTECODE=1
 mounts="$M/mirror/mnt/workdir:/mnt/workdir,/gpfs/jiuquyun:/gpfs/jiuquyun,$E/frank/envs/fastwam-baselines-20261014:/mnt/workdir/frank/envs/fastwam-baselines-20261014,$E/frank/runs/eighteen-preparation-20261014/twelve-ready-u15853:/mnt/workdir/frank/runs/eighteen-preparation-20261014/twelve-ready-u15853"
 export O R
+# Enroot injects graphics/EGL driver libraries only when requested on the host.
+export NVIDIA_DRIVER_CAPABILITIES=all
 srun --container-image="$M/source-runtime.sqsh" --container-mounts="$mounts" bash -c '
   set -euo pipefail
   libs=/mnt/workdir/frank/envs/system-libs/prefix/usr/lib/x86_64-linux-gnu

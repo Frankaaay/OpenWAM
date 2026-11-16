@@ -39,7 +39,7 @@ def main():
     def client_env(base_env, *, libero_path, config_root, render_gpu):
         key = str(config_root)
         if key not in client_envs:
-            env = environment(render_gpu, config_root.parent, software_render=True)
+            env = environment(render_gpu, config_root.parent)
             env.update(LIBERO_PLUS_CONFIG_ROOT=key, LIBERO_CONFIG_PATH=key)
             client_envs[key] = env
         return dict(client_envs[key])
