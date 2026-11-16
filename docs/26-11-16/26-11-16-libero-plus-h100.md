@@ -80,3 +80,22 @@ GPU任务均已核实 `AdminComment=h100:idle`、`Requeue=0`、TimeLimit04:00:00
 当前0050/0054/0062预约表短空档已被本人32卡midtrain54805实际占用，抢任意一台会重排整项训练；不改变现役midtrain。首个无预约冲突的8卡节点0049为11月17日00:00起，计划预约00:00–04:00，作业4h上限与预约保护独立，到期可继续idle。仍先做14回合接入验收，尚未提交10030回合全量评测。
 
 RGBFT使用独立本人clean clone OpenWAM-rgbft；保留原两项排队任务的3ca4f06源码与checkpoint身份不变。新变体按suite复用同一native EEF10统计、固定相同14变体及seed42，输出明确记录variant与实际checkpoint绝对路径。
+
+### 13:58 RGBFT 提交回执
+
+- 代码已推送并在独立clean clone同步 `2dad4a582dd7d8046b19cb7c4a442ae063598723`；原OpenWAM clone仍固定3ca4f06。
+- 模型卡 `reczz28aF161h3C6`；预约 `reczz28aF1P9Am0x`，0049/8卡，北京时间11月17日00:00–04:00，状态已预约；创建前全表冲突检查、创建后字段和模型卡反向关联回读通过。
+- CPU预检54880已COMPLETED/0，确认RGBFT checkpoint/config/tokenizer/既有VAE路径、四suite配置、14任务选择、Mesa设备探测、原生client/server入口和噪声单测。日志最终 `RGBFT_CHECKPOINT_AND_MESA_PREFLIGHT_OK`。
+- GPU作业54882已提交，0049/8GPU/32CPU/480G/4h/no-requeue；依赖资产准备54870。当前PENDING Dependency、尚无GPU输出，预约开始前AdminComment=idle。0049提前释放时允许按idle开跑；00–04预约窗口匹配保护，到期仍在4h作业时限内则自动idle，实际抢占不会自动重排。
+- 日志 `/gpfs/jiuquyun/home/Frank/logs/openwam-libero-plus-rgbft-u13230-eval-54882.out`；输出运行根 `acceptance/wan-rgbft-54882`。当前没有模型GPU加载/Plus真实闭环验收成功证据，也没有全量score。原midtrain54805及其他用户任务未修改。
+
+### 用户改为闲时及midtrain预约核对
+
+用户明确取消RGBFT预约、改用闲时。预约reczz28aF1P9Am0x已改为已取消并回读；原Pending54882取消，重提交不限节点的8GPU闲时54884（依赖54870，4h/no-requeue），确认ReqNodeList=null、AdminComment=h100:idle、PENDING Dependency。源码和14回合范围不变，新输出acceptance/wan-rgbft-54884，日志openwam-libero-plus-rgbft-u13230-eval-54884.out。没有中断任何GPU训练。
+
+用户截图对应midtrain54805实际运行0050/0054/0061/0062。预约全表已完整读取，四条现存记录reczz28aEFu7kQHD/reczz28aEFu7kj40/reczz28aEFu7hntY/reczz28aEFu7jut8分别对应这四台，各8卡，11月16日16:51至18日16:51，关联midtrain卡reczz28a0jigxgWp，无需重复预约。0061当前Kevin预约reczz28ZsNKynIrh有效至16日16:50:13，故当前整组仍idle；没有覆盖他人预约或更改现役midtrain。
+
+LingBot三份最终checkpoint问题按Object/Goal/LIBERO-10核查：H100既有libero-rgbft-ppu15-20261114只有Spatial5000和Object2400，两份transformer各10177831668bytes且有config.json；Goal和LIBERO-10目录不存在，Object5000也不存在。此前Object/Goal补传文档记录未落地，后续最终权重在L20Y的记录不等于H100已有；本轮只核对未发起新传输。
+
+## 闲时评测启动修复
+原Wan54872在主worker导入normalization/OpenCV时缺少libGL.so.1；RGBFT54884因Slurm暂存脚本路径推导仓库而报not a git repository；Stereo54874被失败依赖阻塞。仅修改h100_acceptance.sbatch：明确使用本人OpenWAM-rgbft clone，并在容器内启动Python前设置既有系统库路径，使主worker和子进程均继承。三变体统一使用同一已发布修复SHA，权重/14回合/seed42不变，保留失败日志。bash语法检查通过；真实容器导入验证及重新排队待补。
