@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Evaluate a canonical native-action LIBERO-plus checkpoint through the OpenWAM server.
 
-It imports the canonical native-action policy adapter in this directory.
+It reuses the canonical OpenWAM LIBERO native-action policy adapter.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from openwam2libero_interface import OpenWAMLiberoPolicy  # noqa: E402
+from benchmarks.libero.openwam2libero_interface import OpenWAMLiberoPolicy  # noqa: E402
 
 
 def _repo_root() -> Path:
@@ -105,16 +105,17 @@ def _control_seed(seed: int) -> None:
 
 def _make_env(task, cfg: dict):
     from libero.libero import get_libero_path
-    from libero.libero.envs import OffScreenRenderEnv
+    from stereo_env import PlusStereoEvalEnv
 
     bddl_file = Path(get_libero_path("bddl_files")) / task.problem_folder / task.bddl_file
     assets_dir = Path(get_libero_path("assets"))
     if not assets_dir.is_dir():
         raise SystemExit(f"LIBERO assets are missing: {assets_dir}")
-    return OffScreenRenderEnv(
+    return PlusStereoEvalEnv(
         bddl_file_name=str(bddl_file),
         camera_heights=int(cfg.get("camera_height", 256)),
         camera_widths=int(cfg.get("camera_width", 256)),
+        stereo=_require_bool(cfg.get('stereo', False), 'stereo'),
     )
 
 
@@ -155,8 +156,14 @@ def run_eval(cfg: dict) -> int:
     reseed_each_trial = _require_bool(cfg.get("reseed_each_trial", False), "reseed_each_trial")
     fail_on_incomplete = _require_bool(cfg.get("fail_on_incomplete", False), "fail_on_incomplete")
 
-    init_states = task_suite.get_task_init_states(task_id)
+    import torch
+    from unittest.mock import patch
+    original_load = torch.load
+    # Only the pinned official benchmark init-state file uses numpy pickle.
+    with patch.object(torch, 'load', lambda *a, **kw: original_load(*a, **dict(kw, weights_only=False))):
+        init_states = task_suite.get_task_init_states(task_id)
     env = _make_env_with_randomization_retries(task, cfg)
+    env.seed(seed)
     policy = OpenWAMLiberoPolicy(
         host=cfg.get("host", "127.0.0.1"),
         port=int(cfg.get("port", 8848)),
@@ -173,6 +180,7 @@ def run_eval(cfg: dict) -> int:
         action_clip=cfg.get("action_clip"),
         debug=_require_bool(cfg.get("debug", False), "debug"),
         debug_dir=cfg.get("debug_dir", "./debug_libero"),
+        stereo=_require_bool(cfg.get('stereo', False), 'stereo'),
     )
 
     successes = 0
@@ -191,7 +199,7 @@ def run_eval(cfg: dict) -> int:
                 policy.reset()
                 done = False
                 for step in range(max_steps):
-                    obs, reward, done, _ = env.step(policy.act(obs, task.language))
+                    obs, reward, done, _ = env.step(policy.act(obs, env.language_instruction))
                     result["policy_steps"] = step + 1
                     result["last_reward"] = float(reward)
                     if done:
@@ -220,7 +228,7 @@ def run_eval(cfg: dict) -> int:
             "suite": suite_name,
             "task_id": task_id,
             "task": task.name,
-            "instruction": task.language,
+            "instruction": env.language_instruction,
             "trial_start": trial_start,
             "trial_stop": trial_stop,
             "successes": successes,
