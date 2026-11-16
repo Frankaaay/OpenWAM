@@ -105,3 +105,8 @@ LingBot三份最终checkpoint问题按Object/Goal/LIBERO-10核查：H100既有li
 
 ## 19:35 后续运行错误和重排修复
 54921 RGBFT已完成14回合；54920 Wan在NVIDIA EGL无设备时报错，54922 Stereo因无条件导入旧FastWAM不存在的MetricHead报错，均非抢占。用户要求闲时抢占自动重排：改--requeue并在输出路径加入SLURM_RESTART_COUNT，重启从头验收且保留上次结果，避免同Job目录存在立即失败。Wan/Stereo复用RGBFT已验证Mesa渲染；MetricHead仅在geometry.metric_disparity.shallow_head_weight>0时导入，当前checkpoint无该项，不改变模块/权重合同。AST/bash检查通过。未重跑已完成RGBFT。
+
+重排修复已发布0b0389ccd205ded91457f35d1a8ec363d39ffd90；H100 pull首次TLS断开，同clone重试ff-only成功，未绕过。CPU同容器导入预检54930通过0:0，GPU脚本bash/sbatch test-only通过。新Wan54931已RUNNING0061，Stereo54932 PENDING Dependency afterany54931；两者实读Requeue=1、h100:idle，4h/8GPU串行。抢占后以attempt目录从头重试，尚未发生真实抢占恢复验收。RGBFT54921完成14回合不重跑；三张原模型卡已追加本轮信息。
+
+## 用户要求直接全量
+三组直接全量，停止14回合阶段。新增必要H100全量绑定h100_full.py/h100_full.sbatch，复用run_all_suites原动态队列/协议签名/结果断点续跑，不新造调度器。官方10030任务/四suite，每任务1trial、seed10000、official_global、settle30、600/700steps，三模型30090回合；seed42验收不混入。每组8GPU/1server per GPU、独立闲时队列/Requeue1、7天上限、稳定输出full/{variant}以完成任务为断点。每suite独立绑定原native EEF10统计，复用Mesa渲染、原推理优化和精确权重。静态AST/bash通过，真实CPU全任务dry-run待补；不再提交GPU接入验收。
