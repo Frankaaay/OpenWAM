@@ -27,7 +27,8 @@ from wam.deployment.p7.client import (
 
 
 LOGGER = logging.getLogger(__name__)
-PROMPTS = {"cup_stacking": "Stack the cups.", "object_handover": "Hand over the wooden stick."}
+PROMPTS = {"cup_stacking": "Stack the cups.", "object_handover": "Hand over the wooden stick.",
+           "mug_hanging": "Pick up the mug on the right and hang it on the rack."}
 
 
 class V3P7System(P7System):
@@ -96,7 +97,9 @@ def validate_settings(settings, enable_motion):
     return limits
 
 
-def validate_reply(reply, observation, settings, limits):
+def validate_reply(reply, observation, settings, limits, active_arms="both"):
+    if active_arms not in ("both", "right") or reply.get("active_arms", "both") != active_arms:
+        raise ValueError("Checkpoint active_arms differs from P7 arms selection")
     if (reply.get("observation_id") != observation["observation_id"]
             or reply.get("task") != settings["task"]
             or reply.get("input_mode") != settings["input_mode"]
@@ -129,8 +132,9 @@ def check_anchor(robot, observation, settings):
         raise ValueError("Invalid measured pose after inference")
     translation = np.linalg.norm(current[:, :3] - anchor[:, :3], axis=-1)
     angle = 2 * np.arccos(np.clip(np.abs(np.sum(current[:, 3:7] * anchor[:, 3:7], axis=-1)), 0, 1))
-    if (np.any(translation > settings["client"]["max_anchor_translation"])
-            or np.any(angle > settings["client"]["max_anchor_rotation"])):
+    active = np.asarray(robot._active, dtype=bool)
+    if (np.any(translation[active] > settings["client"]["max_anchor_translation"])
+            or np.any(angle[active] > settings["client"]["max_anchor_rotation"])):
         raise ValueError("Robot moved away from the inference anchor; refusing stale targets")
     return current.reshape(16).astype(np.float32)
 
@@ -139,8 +143,9 @@ def run(settings, config, *, enable_motion=False):
     limits = validate_settings(settings, enable_motion)
     if config.action_space != "tcp" or config.control_hz != 20 or config.async_inference:
         raise ValueError("v3 client requires TCP, 20 Hz and synchronous execution")
-    if config.arms != "both" or config.ttrtc is not None:
-        raise ValueError("v3 checkpoints require P7 arms: both and TTRTC disabled")
+    if (config.arms not in ("both", "right") or config.ttrtc is not None
+            or (config.arms == "right" and settings["task"] != "mug_hanging")):
+        raise ValueError("v3 requires arms: both (or right for mug_hanging) and TTRTC disabled")
     if config.policy_host is None:
         raise ValueError("Set policy.host and policy.port in robot config")
     # No reset or stock gripper threshold/projection is used by this entrypoint.
@@ -164,7 +169,7 @@ def run(settings, config, *, enable_motion=False):
             started = time.monotonic()
             reply = policy.infer(observation)
             elapsed = time.monotonic() - started
-            actions = validate_reply(reply, observation, settings, limits)
+            actions = validate_reply(reply, observation, settings, limits, config.arms)
             LOGGER.info("Inference %.3fs; %d TCP16 targets; raw grippers=%s", elapsed, len(actions), actions[:, [7, 15]])
             if not enable_motion:
                 return  # No reset, switch_mode, or servo calls in check-only mode.

@@ -18,7 +18,19 @@
 
 代码分支：`frank/realrobot-v3-inference`。2026-11-13 已通过 GPU smoke 的权重为 **Wan 叠杯、Wan 交接、Stereo 叠杯**；Stereo 交接按用户要求停止，未完成验证。三项均通过真实记录归一化/TCP 往返、严格加载和两次 10 步推理；这不代表真机闭环已验证。
 
-P7 客户端适配通过 20 项 CPU 合同/模拟 SDK 测试，尚待现场验证真实 SDK、CORA 相机和伺服执行。模型侧推理代码未改变，上述 GPU 结果不等于 P7 硬件验证。
+P7 客户端适配及右臂挂杯路径通过 CPU 合同/模拟 SDK 测试，尚待现场验证真实 SDK、CORA 相机和伺服执行。上述 GPU smoke 早于本次右臂适配，不能当作新挂杯模型或 P7 硬件验证。
+
+### 挂杯新模型：只执行右臂（2026-11-17）
+
+配套训练分支 `frank/realrobot-v3-training`，左臂屏蔽修复提交 `8bdef6b`。新训练权重旁的 `data-contract.json` 必须含 `"active_arms": "right"`；服务端读取该字段，将左臂归一化 state 清零，并仅将右臂 `34:44` 标记为有效动作维度。不要手改旧模型合同冒充右臂重训权重；旧合同缺字段仍按双臂处理。
+
+- GPU 和机器人共用的 `configs/realrobot_v3_inference.yaml`：设 `task: mug_hanging`；Wan 用 `input_mode: mono-left`，Stereo 用 `stereo`。
+- 机器人 `--robot-config` 指向的 P7 YAML：设 **`arms: right`**，其余按下文配置。客户端逐次核对服务端 `active_arms` 与此配置，任何不一致都会在发送动作前报错。
+- 挂杯 prompt 已内置：`Pick up the mug on the right and hang it on the rack.`；沿用训练的文本前缀。
+- P7 仍读取双臂反馈并保持 TCP16 传输格式，但左臂仅为占位数据，**不获取左臂控制权、不切换左臂控制模式、不发送左臂位姿或夹爪指令**。左臂请预先放在合适姿态，本入口不主动保持/复位左臂。
+- 头部训练数据已纠正方向，现场 `rotate_180` 以送入模型的实际画面与训练样图一致为准，不再改训练视频。首次先不加 `--enable-motion` 检查接口，再按现有流程启用运动。
+
+叠杯与交接继续使用 `arms: both`。本次没有重训、GPU 模型推理或真机运动验证；CPU 测试使用固定 ORION P7 源码与模拟设备。
 
 ### 1. 准备代码、环境和资产
 
@@ -44,13 +56,13 @@ H100 资产根目录为 `/gpfs/jiuquyun/projects/Frank/realrobot-v3-posttrain-20
 编辑本分支的 [`configs/realrobot_v3_inference.yaml`](configs/realrobot_v3_inference.yaml)，GPU 端和机器人端使用相同内容：
 
 ```yaml
-task: cup_stacking       # 交接改为 object_handover
+task: cup_stacking       # 交接 object_handover；右臂挂杯 mug_hanging
 input_mode: mono-left    # Wan 用 mono-left；Stereo 用 stereo
 ```
 
 Stereo 的 `client.right_camera_topics` 已填写 head-right、left-wrist-right、right-wrist-right 三个 `rt/camera/.../right/image_rect` 话题；按现场发布名称核对。Wan 使用三个安装位的左目。每安装位左右目共用 P7 配置的 `rotate_180`。
 
-从 ORION 的 `src/wam/deployment/p7/deployment_config.yaml` 复制现场配置，修改以下字段并保留其他必需字段（不要使用一代臂配置）。上游默认 `arms: right` 必须改为 `both`：
+从 ORION 的 `src/wam/deployment/p7/deployment_config.yaml` 复制现场配置，修改以下字段并保留其他必需字段（不要使用一代臂配置）。叠杯/交接用 `arms: both`，新右臂挂杯模型用 `arms: right`：
 
 ```yaml
 action_space: tcp

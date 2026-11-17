@@ -68,6 +68,62 @@ def test_stats_mapping_includes_raw_grippers_and_distinct_state_action_stats():
     assert abs(norm.unnormalize(normalized)[0, 9] - 0.041) < 1e-6
 
 
+def test_right_only_normalization_and_unsupervised_outputs():
+    raw = v3.cartesian_to_tcp(pose())
+    norm = v3.V3Normalizer(stats(), "right")
+    expected = v3.V3Normalizer(stats()).normalize(raw)
+    expected[:10] = 0
+    np.testing.assert_array_equal(norm.normalize(raw), expected)
+    raw[:10] += 1000
+    np.testing.assert_array_equal(norm.normalize(raw), expected)
+    np.testing.assert_array_equal(norm._dst_index, np.arange(34, 44))
+    prediction = relative()
+    prediction[:, :10] = 999  # Invalid rotation and huge motion on unsupervised arm.
+    anchor = v3.cartesian_to_tcp(pose())
+    targets = v3.absolute_targets(anchor, prediction, 0.08, 0.5, active_arms="right")
+    np.testing.assert_allclose(targets[:, :8], np.tile(pose()[:8], (32, 1)), atol=1e-7)
+    baseline = v3.absolute_targets(anchor, relative(), 0.08, 0.5)
+    np.testing.assert_array_equal(targets[:, 8:], baseline[:, 8:])
+    with pytest.raises(ValueError, match="translation"):
+        v3.absolute_targets(anchor, prediction, 0.08, 0.5)
+    prediction[:, 10] = 999
+    with pytest.raises(ValueError, match="translation"):
+        v3.absolute_targets(anchor, prediction, 0.08, 0.5, active_arms="right")
+
+
+@pytest.mark.parametrize("active", ["right", "both", None, "left"])
+def test_load_policy_uses_checkpoint_arm_contract(tmp_path, monkeypatch, active):
+    import hashlib
+    import json
+
+    from omegaconf import OmegaConf
+
+    checkpoint = tmp_path / "checkpoint_step_5550.safetensors"
+    checkpoint.touch()
+    blob = json.dumps(stats()).encode()
+    (tmp_path / "realrobot_stats.json").write_bytes(blob)
+    (tmp_path / "config.yaml").write_text("{}")
+    contract = dict(task="mug_hanging", model="wan", smoke=False, stats_sha256=hashlib.sha256(blob).hexdigest())
+    if active is not None:
+        contract["active_arms"] = active
+    (tmp_path / "data-contract.json").write_text(json.dumps(contract))
+    bound = {}
+    architecture = SimpleNamespace(action_dim=80, attach_normalizer=lambda n: bound.update(normalizer=n))
+    monkeypatch.setitem(sys.modules, "openwam.deploy.model_loader", SimpleNamespace(
+        load_from_checkpoint_dir=lambda *a, **k: (OmegaConf.create({}), architecture)))
+    monkeypatch.setitem(sys.modules, "openwam.deploy.engine", SimpleNamespace(
+        JointInferenceEngine=lambda *a: SimpleNamespace(generate=lambda c: {"actions": relative()})))
+    if active == "left":
+        with pytest.raises(ValueError, match="active_arms"):
+            v3.load_policy(checkpoint, "mug_hanging", "mono-left", denoise_steps=10)
+        return
+    policy = v3.load_policy(checkpoint, "mug_hanging", "mono-left", denoise_steps=10)
+    assert policy.active_arms == bound["normalizer"].active_arms == (active or "both")
+    obs = observation()
+    obs["prompt"] = v3.PROMPTS["mug_hanging"]
+    assert policy.infer(obs)["active_arms"] == (active or "both")
+
+
 @pytest.mark.parametrize("field,value", [("state_std", [0] * 20), ("action_mean", [float('nan')] * 20),
                                          ("gripper_transform", "canonical_openness")])
 def test_bad_stats_rejected(field, value):
@@ -302,6 +358,11 @@ def test_p7_feedback_and_send_preserve_tcp_and_convert_gripper_once():
     shifted["observation/cartesian_state"][0] += 0.02
     with pytest.raises(ValueError, match="anchor"):
         client.check_anchor(robot, shifted, settings)
+    robot._active = (False, True)
+    np.testing.assert_allclose(client.check_anchor(robot, shifted, settings), pose())
+    shifted["observation/cartesian_state"][8] += 0.02
+    with pytest.raises(ValueError, match="anchor"):
+        client.check_anchor(robot, shifted, settings)
 
 
 @pytest.mark.parametrize("stereo", [False, True])
@@ -347,19 +408,22 @@ def test_p7_config_rejects_single_arm_and_overwide_grippers():
 
 
 @pytest.mark.parametrize("failure", ["enable", "send"])
-def test_p7_motion_failure_releases_and_never_executes_warmup(monkeypatch, failure):
+@pytest.mark.parametrize("active_arms", ["both", "right"])
+def test_p7_motion_failure_releases_and_never_executes_warmup(monkeypatch, failure, active_arms):
     from dataclasses import replace
     import yaml
     from wam.deployment.p7.client import DEFAULT_DEPLOYMENT_CONFIG
     client = load_file("v3_p7_cleanup", ROOT / "scripts/realrobot_v3_client.py")
     settings = yaml.safe_load((ROOT / "configs/realrobot_v3_inference.yaml").read_text())
     settings["client"]["interfaces_verified"] = True
-    config = replace(client.load_deployment_config(DEFAULT_DEPLOYMENT_CONFIG), arms="both")
+    if active_arms == "right":
+        settings["task"] = "mug_hanging"
+    config = replace(client.load_deployment_config(DEFAULT_DEPLOYMENT_CONFIG), arms=active_arms)
     calls = []
 
     class Robot:
         def __init__(self, *args):
-            pass
+            assert args[0].arms == active_arms
 
         def observation(self, prompt):
             obs = observation()
@@ -391,7 +455,7 @@ def test_p7_motion_failure_releases_and_never_executes_warmup(monkeypatch, failu
         def infer(self, obs):
             calls.append("infer")
             return dict(actions=np.tile(pose(), (4, 1)), observation_id=obs["observation_id"],
-                        task="cup_stacking", input_mode="mono-left", action_rate_hz=20,
+                        task=settings["task"], input_mode="mono-left", action_rate_hz=20, active_arms=active_arms,
                         first_target_offset_s=0.05)
 
         def close(self):
@@ -414,3 +478,54 @@ def test_p7_motion_failure_releases_and_never_executes_warmup(monkeypatch, failu
     else:
         assert calls[3:7] == ["mark", "observe", "infer", "send"]
     assert calls[-3:] == ["policy_close", "stop", "release"]
+
+
+def test_right_only_client_contract_and_p7_sdk_calls():
+    import yaml
+    client = load_file("v3_p7_right_only", ROOT / "scripts/realrobot_v3_client.py")
+    settings = yaml.safe_load((ROOT / "configs/realrobot_v3_inference.yaml").read_text())
+    settings["task"] = "mug_hanging"
+    obs = observation()
+    reply = dict(actions=np.tile(pose(), (4, 1)), observation_id=obs["observation_id"], task="mug_hanging",
+                 input_mode="mono-left", action_rate_hz=20, first_target_offset_s=0.05, active_arms="right")
+    limits = client.validate_settings(settings, False)
+    client.validate_reply(reply, obs, settings, limits, "right")
+    with pytest.raises(ValueError, match="active_arms"):
+        client.validate_reply(reply, obs, settings, limits, "both")
+    del reply["active_arms"]
+    with pytest.raises(ValueError, match="active_arms"):
+        client.validate_reply(reply, obs, settings, limits, "right")
+    calls = []
+
+    class Arm:
+        def __init__(self, side):
+            self.side = side
+
+        def __getattr__(self, name):
+            def call(*args, **kwargs):
+                calls.append((self.side, name))
+                return True
+            return call
+
+    robot = client.P7System.__new__(client.P7System)
+    robot._arms = [Arm("left"), Arm("right")]
+    robot._active = (False, True)
+    robot._controlled = [False, False]
+    robot._moving = False
+    robot._readers = []
+    robot._action_space = "tcp"
+    robot._pose = SimpleNamespace
+    robot._servo_pose = robot._eef_async = None
+    robot._gripper_mm = [None, None]
+    robot._servo_joint_speed = [1.] * 7
+    robot._controller = SimpleNamespace(servo_control="servo", planning_control="hold", idle="idle")
+    robot._eef_mode = SimpleNamespace(csp="csp", idle="idle")
+    robot.enable_servo()
+    robot.mark_moving()
+    robot.send(pose())
+    robot.stop_motion()
+    robot.close()
+    # Closing the read-only connection is allowed; no left control/pose/gripper commands.
+    assert [name for side, name in calls if side == "left"] == ["close"]
+    for name in ["acquire_control", "switch_controller", "move_end_pose", "move_eef", "release_control"]:
+        assert ("right", name) in calls

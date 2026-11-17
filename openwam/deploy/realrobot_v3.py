@@ -18,7 +18,8 @@ from scipy.spatial.transform import Rotation
 
 SLOTS = np.array([*range(10), *range(34, 44)])
 CAMERAS = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
-PROMPTS = {"cup_stacking": "Stack the cups.", "object_handover": "Hand over the wooden stick."}
+PROMPTS = {"cup_stacking": "Stack the cups.", "object_handover": "Hand over the wooden stick.",
+           "mug_hanging": "Pick up the mug on the right and hang it on the rack."}
 PREFIX = "A video recorded from a robot's point of view executing the following instruction: "
 
 
@@ -58,7 +59,11 @@ class V3Normalizer:
     _dst_index = SLOTS
     _unify_dim = 80
 
-    def __init__(self, stats):
+    def __init__(self, stats, active_arms="both"):
+        if active_arms not in ("both", "right"):
+            raise ValueError("active_arms must be both or right")
+        self.active_arms = active_arms
+        self._dst_index = SLOTS if active_arms == "both" else SLOTS[10:]
         if (stats.get("supervision") != "recorded_pose_targets_not_joint_commands"
                 or stats.get("gripper_transform") != "empirical_zscore_no_clipping"
                 or stats.get("action_rate_hz") != 20 or stats.get("rgb_rate_hz") != 10):
@@ -72,6 +77,8 @@ class V3Normalizer:
         state = finite(state, (20,), "TCP state")
         output = np.zeros(80, dtype=np.float32)
         output[SLOTS] = (state - self.stats["state_mean"]) / self.stats["state_std"]
+        if self.active_arms == "right":
+            output[:10] = 0
         return output
 
     def unnormalize(self, action):
@@ -81,10 +88,19 @@ class V3Normalizer:
         return action[:, SLOTS] * self.stats["action_std"] + self.stats["action_mean"]
 
 
-def absolute_targets(anchor, relative, max_translation, max_rotation, count=32):
+def absolute_targets(anchor, relative, max_translation, max_rotation, count=32, *, active_arms="both"):
     """Every target uses the observation's fixed anchor, never the previous target."""
     anchor = finite(anchor, (20,), "anchor").reshape(2, 10)
     relative = finite(relative, (34, 20), "relative actions").reshape(34, 2, 10)
+    if active_arms not in ("both", "right"):
+        raise ValueError("active_arms must be both or right")
+    if active_arms == "right":
+        # TCP16 transport keeps a left placeholder; the P7 client never sends it.
+        # Discard unsupervised outputs before rotation and motion validation.
+        relative = relative.copy()
+        relative[:, 0] = 0
+        relative[:, 0, 3:9] = [1, 0, 0, 0, 1, 0]
+        relative[:, 0, 9] = anchor[0, 9]
     # Indices 0/1 are t=-50ms/0. Only future targets may reach the robot.
     future = relative[2:2 + count]
     if np.any(np.linalg.norm(future[..., :3], axis=-1) > max_translation):
@@ -132,7 +148,10 @@ def validate_observation(observation, mode, max_skew_s):
 
 class V3Policy:
     def __init__(self, engine, task, mode, *, actions_per_chunk=4,
-                 max_translation=0.08, max_rotation=0.5, max_skew_s=0.035):
+                 max_translation=0.08, max_rotation=0.5, max_skew_s=0.035, active_arms="both"):
+        if active_arms not in ("both", "right") or (active_arms == "right" and task != "mug_hanging"):
+            raise ValueError("Invalid task/active_arms contract")
+        self.active_arms = active_arms
         if task not in PROMPTS or mode not in ("mono-left", "stereo"):
             raise ValueError("Unknown v3 task/input mode")
         if not 1 <= actions_per_chunk <= 32:
@@ -156,9 +175,10 @@ class V3Policy:
             conditions["right_first_frame_image"] = [camera_mosaic(observation, right=True)]
         result = self.engine.generate(conditions)
         # architecture.generate already applies V3Normalizer. Do not unnormalize twice.
-        actions = absolute_targets(anchor, result["actions"], self.max_translation, self.max_rotation, self.chunk)
+        actions = absolute_targets(anchor, result["actions"], self.max_translation, self.max_rotation, self.chunk,
+                                   active_arms=self.active_arms)
         return dict(actions=actions[:self.chunk], observation_id=observation["observation_id"],
-                    task=self.task, input_mode=self.mode, action_rate_hz=20,
+                    task=self.task, input_mode=self.mode, action_rate_hz=20, active_arms=self.active_arms,
                     first_target_offset_s=0.05, inference_seconds=time.perf_counter() - started)
 
 
@@ -179,7 +199,10 @@ def load_policy(checkpoint, task, mode, **options):
     if hashlib.sha256(stats_bytes).hexdigest() != contract.get("stats_sha256"):
         raise ValueError("Normalization artifact differs from the training contract")
     stats = json.loads(stats_bytes)
-    normalizer = V3Normalizer(stats)
+    active_arms = contract.get("active_arms", "both")
+    if active_arms not in ("both", "right") or (active_arms == "right" and task != "mug_hanging"):
+        raise ValueError("Invalid checkpoint active_arms contract")
+    normalizer = V3Normalizer(stats, active_arms)
     # v3 normalized in its dataset. Reject an unrelated generic normalizer config.
     saved = OmegaConf.load(root / "config.yaml")
     if OmegaConf.select(saved, "dataloader.normalize_mode") not in (None, "none", "null", ""):
@@ -194,7 +217,7 @@ def load_policy(checkpoint, task, mode, **options):
     cfg.inference = OmegaConf.create(dict(denoise_steps=options.pop("denoise_steps"), denoise_mode="sync"))
     cfg.optimization = OmegaConf.create(dict(decode_video=False, compile=dict(enabled=False),
                                             dit_cache=dict(enabled=False)))
-    return V3Policy(JointInferenceEngine(cfg, architecture), task, mode, **options)
+    return V3Policy(JointInferenceEngine(cfg, architecture), task, mode, active_arms=active_arms, **options)
 
 
 def main():
